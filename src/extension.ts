@@ -1,12 +1,8 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 import { ExtensionContext, workspace, window } from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
 import { registerCommands } from './commands';
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
 async function detectNetWorkspace(): Promise<boolean> {
   try {
     const config = workspace.getConfiguration('diNavigator');
@@ -56,9 +52,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   // Register commands
   registerCommands(context);
+  window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
 }
 
-// This method is called when your extension is deactivated
 export function deactivate() {
   serviceProvider.clearState();
 }
