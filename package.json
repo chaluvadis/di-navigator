@@ -14,7 +14,7 @@
     "url": "https://github.com/chaluvadis/di-navigator/issues"
   },
   "engines": {
-    "vscode": "^1.104.0"
+    "vscode": "^1.103.0"
   },
   "categories": [
     "Other",
