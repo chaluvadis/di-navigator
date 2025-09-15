@@ -1,30 +1,67 @@
 import * as vscode from 'vscode';
-import { ServiceGroup, Service, Registration, Lifetime } from './models';
+import { ServiceGroup, Service, Registration, Lifetime, Colors } from './models';
 import { parseCsharp, extractRegistrations } from './parser';
+import path from 'path';
 
 export class ServiceProvider {
     private serviceGroups: ServiceGroup[] = [];
     private cache = new Map<string, ServiceGroup[]>();
+    private context: vscode.ExtensionContext | undefined;
+
+    setContext(context: vscode.ExtensionContext): void {
+        this.context = context;
+    }
 
     async collectRegistrations(): Promise<void> {
+        if (!this.context) {
+            console.error('Extension context not set. Cannot access global state.');
+            return;
+        }
+
         const registrations: Registration[] = [];
 
-        // Scan for C# files in workspace
-        const config = vscode.workspace.getConfiguration('diNavigator');
-        const excludePatterns = config.get<string[]>('excludeFolders') || ['**/bin/**', '**/obj/**', '**/Properties/**'];
-        const excludeGlob = excludePatterns.join(', ');
-        const csFiles = await vscode.workspace.findFiles('**/*.cs', excludeGlob);
+        // Get selected project from global state
+        const selectedProject = this.context?.globalState.get('diNavigator.selectedProject') as string | undefined;
 
+        let csFiles: vscode.Uri[];
+        if (selectedProject) {
+          const { dir: projectDir } = path.parse(selectedProject);
+          const projectUri = vscode.Uri.file(projectDir);
+          const includePattern = new vscode.RelativePattern(projectUri, '**/*.cs');
+          const excludePatterns = ['**/bin/**', '**/obj/**', '**/Properties/**'];
+          const excludeGlob = `{${excludePatterns.join(',')}}`;
+          csFiles = await vscode.workspace.findFiles(includePattern, excludeGlob);
+          console.log(`Scoped to selected project: ${selectedProject}`);
+        } else {
+          const config = vscode.workspace.getConfiguration('diNavigator');
+          const excludePatterns = config.get<string[]>('excludeFolders') ?? ['**/bin/**', '**/obj/**', '**/Properties/**'];
+          const excludeGlob = excludePatterns.length > 1 ? `{${excludePatterns.join(',')}}` : excludePatterns[0];
+          csFiles = await vscode.workspace.findFiles('**/*.cs', excludeGlob);
+          console.log('Scanning entire workspace for DI registrations');
+        }
+        console.log(`Scanning ${csFiles.length} C# files for DI registrations`);
+
+        let totalFiles = 0;
+        let totalRegs = 0;
         for (const file of csFiles) {
+            totalFiles++;
             try {
                 const document = await vscode.workspace.openTextDocument(file);
                 const sourceCode = document.getText();
                 const rootNode = parseCsharp(sourceCode);
                 const fileRegs = extractRegistrations(rootNode, file.fsPath);
+                totalRegs += fileRegs.length;
                 registrations.push(...fileRegs);
+                if (fileRegs.length > 0) {
+                    console.log(`Parsed ${file.fsPath}: found ${fileRegs.length} registrations`);
+                }
             } catch (error) {
                 console.error(`Error parsing ${file.fsPath}:`, error);
             }
+        }
+        console.log(`Total C# files scanned: ${totalFiles}, Total registrations found: ${totalRegs}`);
+        if (totalRegs === 0) {
+            console.warn('No DI registrations found. Check if your .cs files have standard services.Add* calls.');
         }
 
         // Group into services
@@ -37,35 +74,50 @@ export class ServiceProvider {
             }
             service.registrations.push(reg);
             // Basic conflict: multiple impls for same service in same lifetime
-            const implsInLifetime = service.registrations.filter(r => r.lifetime === reg.lifetime).map(r => r.implementationType);
-            if (new Set(implsInLifetime).size > 1) {
-                service.hasConflicts = true;
+            const lifetimeImpls = service.registrations
+              .filter(r => r.lifetime === reg.lifetime)
+              .map(r => r.implementationType);
+            if (new Set(lifetimeImpls).size > 1) {
+              service.hasConflicts = true;
             }
         }
 
-        // Group by lifetime
+        // Group by lifetime, creating lifetime-specific service views to avoid duplication
         this.serviceGroups = [];
-        const lifetimes = [Lifetime.Singleton, Lifetime.Scoped, Lifetime.Transient];
-        for (const lifetime of lifetimes) {
-            const services = Array.from(servicesByName.values()).filter(s => s.registrations.some(r => r.lifetime === lifetime));
-            if (services.length > 0) {
+        const lifeTimes = [Lifetime.Singleton, Lifetime.Scoped, Lifetime.Transient];
+
+        for (const lifetime of lifeTimes) {
+            const lifeTimeServices: Service[] = [];
+            for (const service of Array.from(servicesByName.values())) {
+                const lifetimeRegs = service.registrations.filter(r => r.lifetime === lifetime);
+                if (lifetimeRegs.length > 0) {
+                    const lifeTimeService: Service = {
+                      ...service,
+                      registrations: lifetimeRegs,
+                      hasConflicts: new Set(lifetimeRegs.map(r => r.implementationType)).size > 1
+                    };
+                    lifeTimeServices.push(lifeTimeService);
+                }
+            }
+            if (lifeTimeServices.length > 0) {
                 this.serviceGroups.push({
                     lifetime,
-                    services,
+                    services: lifeTimeServices,
                     color: this.getLifetimeColor(lifetime)
                 });
             }
         }
 
         this.cache.set('default', this.serviceGroups);
+        this.cache.clear(); // Clear other caches if any, but since only 'default' is used, optional
     }
 
     private getLifetimeColor(lifetime: Lifetime): string {
         switch (lifetime) {
-            case Lifetime.Singleton: return '#FF5722'; // Orange
-            case Lifetime.Scoped: return '#2196F3'; // Blue
-            case Lifetime.Transient: return '#4CAF50'; // Green
-            default: return '#9E9E9E';
+            case Lifetime.Singleton: return Colors.Singleton
+            case Lifetime.Scoped: return Colors.Scoped
+            case Lifetime.Transient: return Colors.Transient
+            default: return Colors.Default
         }
     }
 

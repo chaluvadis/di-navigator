@@ -1,6 +1,6 @@
 {
-  "name": "di-service-navigator",
-  "displayName": "di-service-navigator",
+  "name": "di-navigator",
+  "displayName": "di-navigator",
   "description": "Visualize and navigate your .NET Dependency Injection registrations inside VSCode.",
   "version": "0.0.1",
   "icon": "./icon.png",
@@ -14,7 +14,7 @@
     "url": "https://github.com/chaluvadis/di-navigator/issues"
   },
   "engines": {
-    "vscode": "^1.103.0"
+    "vscode": "^1.104.0"
   },
   "categories": [
     "Other",
@@ -24,7 +24,8 @@
   "activationEvents": [
     "onLanguage:csharp",
     "onWorkspaceContains:*.csproj",
-    "onWorkspaceContains:*.sln"
+    "onWorkspaceContains:*.sln",
+    "onWorkspaceContains:*.slnx"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -36,6 +37,10 @@
       {
         "command": "di-navigator.goToImplementation",
         "title": "Go to DI Implementation"
+      },
+      {
+        "command": "di-navigator.selectProject",
+        "title": "Select Project for DI Analysis"
       }
     ],
     "views": {

@@ -1,7 +1,7 @@
-export enum Lifetime {
-    Singleton = 'Singleton',
-    Scoped = 'Scoped',
-    Transient = 'Transient'
+export const enum Lifetime {
+  Singleton = 'Singleton',
+  Scoped = 'Scoped',
+  Transient = 'Transient'
 }
 
 export interface Registration {
@@ -39,4 +39,11 @@ export interface InjectionSite {
 export interface Conflict {
     type: string; // 'Duplicate', 'MissingImpl', etc.
     details: string;
+}
+
+export const enum Colors {
+  Singleton = '#FF5722',
+  Scoped = '#2196F3',
+  Transient = '#4CAF50',
+  Default = '#9E9E9E'
 }

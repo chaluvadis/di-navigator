@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
 import { Service, InjectionSite } from './models';
+import { registerCommands } from './commands';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -51,32 +52,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(csWatcher);
 
   // Register commands
-  const refreshDisposable = vscode.commands.registerCommand('di-navigator.refreshServices', async () => {
-    await serviceProvider.refresh();
-    diNavigatorProvider.refresh();
-    vscode.window.showInformationMessage('DI Services refreshed');
-    console.log('Refresh DI Services command executed.');
-  });
-
-  const gotoImplDisposable = vscode.commands.registerCommand('di-navigator.goToImplementation', async (service: Service) => {
-    // Basic navigation: open the file of first registration
-    if (service && service.registrations.length > 0) {
-      const reg = service.registrations[0];
-      const doc = await vscode.workspace.openTextDocument(reg.filePath);
-      await vscode.window.showTextDocument(doc, { selection: new vscode.Range(reg.lineNumber - 1, 0, reg.lineNumber - 1, 0) });
-    }
-    console.log('Go to DI Implementation command executed.');
-  });
-
-  const gotoSiteDisposable = vscode.commands.registerCommand('di-navigator.goToInjectionSite', async (site: InjectionSite) => {
-    if (site) {
-      const doc = await vscode.workspace.openTextDocument(site.filePath);
-      await vscode.window.showTextDocument(doc, { selection: new vscode.Range(site.lineNumber - 1, 0, site.lineNumber - 1, 0) });
-    }
-    console.log('Go to Injection Site command executed.');
-  });
-
-  context.subscriptions.push(refreshDisposable, gotoImplDisposable, gotoSiteDisposable);
+  registerCommands(context);
 }
 
 // This method is called when your extension is deactivated

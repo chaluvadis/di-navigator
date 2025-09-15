@@ -3,39 +3,19 @@ import { ServiceGroup, Service, InjectionSite } from './models';
 import { serviceProvider } from './serviceProvider';
 
 function isServiceGroup(element: any): element is ServiceGroup {
-  return element
-    && typeof element === 'object'
-    && 'lifetime' in element
-    && 'services' in element
-    && Array.isArray(element.services);
+  return element?.lifetime !== undefined && Array.isArray(element.services);
 }
 
 function isInjectionSite(element: any): element is InjectionSite {
-  return element
-    && typeof element === 'object'
-    && 'filePath' in element
-    && 'lineNumber' in element
-    && 'className' in element
-    && 'serviceType' in element;
+  return element?.filePath !== undefined && element.lineNumber !== undefined;
 }
 
 function isService(element: any): element is Service {
-  return element
-    && typeof element === 'object'
-    && 'name' in element
-    && 'registrations' in element
-    && Array.isArray(element.registrations);
+  return element?.name !== undefined && Array.isArray(element.registrations);
 }
 
 export class DINavigatorProvider implements vscode.TreeDataProvider<vscode.TreeItem | ServiceGroup | Service | InjectionSite> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem
-    | ServiceGroup
-    | Service
-    | InjectionSite
-    | undefined
-    | null
-    | void
-  >();
+  private _onDidChangeTreeData = new vscode.EventEmitter<ServiceGroup | Service | InjectionSite | undefined>();
 
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
@@ -48,7 +28,7 @@ export class DINavigatorProvider implements vscode.TreeDataProvider<vscode.TreeI
       return groupItem;
     } else if (isService(element)) {
       const serviceItem = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.Collapsed);
-      serviceItem.description = `${element.registrations.length} registrations${element.injectionSites.length > 0 ? `, ${element.injectionSites.length} injection sites` : ''}`;
+      serviceItem.description = `${element.registrations.length} registrations${element.injectionSites?.length ? `, ${element.injectionSites.length} injection sites` : ''}`;
       serviceItem.iconPath = new vscode.ThemeIcon('symbol-class');
       if (element.hasConflicts) {
         serviceItem.iconPath = new vscode.ThemeIcon('warning');
