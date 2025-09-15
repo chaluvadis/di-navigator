@@ -1,0 +1,56 @@
+name: Build & Release VS Code Extension
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Ensures tags are available
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install dependencies
+      run: npm i
+
+    - name: Compile extension
+      run: npm run compile
+    
+    - name: Package extension
+      run: |
+        # Use the tag name as part of the VSIX filename when available.
+        TAG="${{ github.ref_name }}"
+        if [ -z "$TAG" ]; then
+          TAG="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+        fi
+        OUT="di-service-navigator-${TAG}.vsix"
+        echo "OUT=${OUT}" >> $GITHUB_ENV
+        echo "Packaging VSIX -> ${OUT}"
+        npx vsce package --out "${OUT}"
+      shell: bash
+
+    - name: Get version from tag
+      id: get_version
+      run: |
+        echo "VSIX_NAME=$(ls *.vsix | head -n 1)" >> $GITHUB_ENV
+
+    - name: Create GitHub Release and upload VSIX
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ env.VSIX_NAME }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
