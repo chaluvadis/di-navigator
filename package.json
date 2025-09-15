@@ -1,6 +1,6 @@
 {
-  "name": "di-navigator",
-  "displayName": "di-navigator",
+  "name": "di-service-navigator",
+  "displayName": "di-service-navigator",
   "description": "Visualize and navigate your .NET Dependency Injection registrations inside VSCode.",
   "version": "0.0.1",
   "icon": "./icon.png",
