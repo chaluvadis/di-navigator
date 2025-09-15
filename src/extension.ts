@@ -1,32 +1,35 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
-import * as vscode from 'vscode';
+import { ExtensionContext, workspace, window } from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
-import { Service, InjectionSite } from './models';
 import { registerCommands } from './commands';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 async function detectNetWorkspace(): Promise<boolean> {
   try {
-    const config = vscode.workspace.getConfiguration('diNavigator');
+    const config = workspace.getConfiguration('diNavigator');
     const excludePatterns = config.get<string[]>('excludeFolders') || ['**/bin/**', '**/obj/**', '**/Properties/**'];
     const excludeGlob = excludePatterns.join(', ');
-    const csprojFiles = await vscode.workspace.findFiles('**/*.csproj', excludeGlob);
-    const slnFiles = await vscode.workspace.findFiles('**/*.sln', excludeGlob);
-    return csprojFiles.length > 0 || slnFiles.length > 0;
+    const csprojFiles = await workspace.findFiles('**/*.csproj', excludeGlob);
+    const slnFiles = await workspace.findFiles('**/*.sln', excludeGlob);
+    const slnxFiles = await workspace.findFiles('**/*.slnx', excludeGlob);
+    return csprojFiles.length > 0 || slnFiles.length > 0 || slnxFiles.length > 0;
   } catch (error) {
     console.error('Error detecting .NET workspace:', error);
     return false;
   }
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(context: ExtensionContext): Promise<void> {
   console.log('Congratulations, your extension "di-navigator" is now active!');
 
-  // Register TreeView provider
-  const treeViewDisposable = vscode.window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
+  // Set context for serviceProvider
+  serviceProvider.setContext(context);
+
+  // Register TreeView provider always
+  const treeViewDisposable = window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
   context.subscriptions.push(treeViewDisposable);
 
   // Detect if this is a .NET workspace
@@ -41,7 +44,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // Watch for .cs file changes to refresh
-  const csWatcher = vscode.workspace.createFileSystemWatcher('**/*.cs');
+  const csWatcher = workspace.createFileSystemWatcher('**/*.cs');
   csWatcher.onDidChange(async () => {
     const isNet = await detectNetWorkspace();
     if (isNet) {
@@ -56,4 +59,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 // This method is called when your extension is deactivated
-export function deactivate() { }
+export function deactivate() {
+  serviceProvider.clearState();
+}

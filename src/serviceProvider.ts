@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+import { ExtensionContext, Uri, workspace, RelativePattern } from 'vscode';
 import { ServiceGroup, Service, Registration, Lifetime, Colors } from './models';
 import { parseCsharp, extractRegistrations } from './parser';
 import path from 'path';
@@ -6,10 +6,16 @@ import path from 'path';
 export class ServiceProvider {
     private serviceGroups: ServiceGroup[] = [];
     private cache = new Map<string, ServiceGroup[]>();
-    private context: vscode.ExtensionContext | undefined;
+    private context: ExtensionContext | undefined;
 
-    setContext(context: vscode.ExtensionContext): void {
+    setContext(context: ExtensionContext): void {
         this.context = context;
+    }
+
+    clearState(): void {
+        if (this.context) {
+            this.context.globalState.update('diNavigator.selectedProject', undefined);
+        }
     }
 
     async collectRegistrations(): Promise<void> {
@@ -23,21 +29,21 @@ export class ServiceProvider {
         // Get selected project from global state
         const selectedProject = this.context?.globalState.get('diNavigator.selectedProject') as string | undefined;
 
-        let csFiles: vscode.Uri[];
+        let csFiles: Uri[];
         if (selectedProject) {
-          const { dir: projectDir } = path.parse(selectedProject);
-          const projectUri = vscode.Uri.file(projectDir);
-          const includePattern = new vscode.RelativePattern(projectUri, '**/*.cs');
-          const excludePatterns = ['**/bin/**', '**/obj/**', '**/Properties/**'];
-          const excludeGlob = `{${excludePatterns.join(',')}}`;
-          csFiles = await vscode.workspace.findFiles(includePattern, excludeGlob);
-          console.log(`Scoped to selected project: ${selectedProject}`);
+            const { dir: projectDir } = path.parse(selectedProject);
+            const projectUri = Uri.file(projectDir);
+            const includePattern = new RelativePattern(projectUri, '**/*.cs');
+            const excludePatterns = ['**/bin/**', '**/obj/**', '**/Properties/**'];
+            const excludeGlob = `{${excludePatterns.join(',')}}`;
+            csFiles = await workspace.findFiles(includePattern, excludeGlob);
+            console.log(`Scoped to selected project: ${selectedProject}`);
         } else {
-          const config = vscode.workspace.getConfiguration('diNavigator');
-          const excludePatterns = config.get<string[]>('excludeFolders') ?? ['**/bin/**', '**/obj/**', '**/Properties/**'];
-          const excludeGlob = excludePatterns.length > 1 ? `{${excludePatterns.join(',')}}` : excludePatterns[0];
-          csFiles = await vscode.workspace.findFiles('**/*.cs', excludeGlob);
-          console.log('Scanning entire workspace for DI registrations');
+            const config = workspace.getConfiguration('diNavigator');
+            const excludePatterns = config.get<string[]>('excludeFolders') ?? ['**/bin/**', '**/obj/**', '**/Properties/**'];
+            const excludeGlob = excludePatterns.length > 1 ? `{${excludePatterns.join(',')}}` : excludePatterns[0];
+            csFiles = await workspace.findFiles('**/*.cs', excludeGlob);
+            console.log('Scanning entire workspace for DI registrations');
         }
         console.log(`Scanning ${csFiles.length} C# files for DI registrations`);
 
@@ -46,7 +52,7 @@ export class ServiceProvider {
         for (const file of csFiles) {
             totalFiles++;
             try {
-                const document = await vscode.workspace.openTextDocument(file);
+                const document = await workspace.openTextDocument(file);
                 const sourceCode = document.getText();
                 const rootNode = parseCsharp(sourceCode);
                 const fileRegs = extractRegistrations(rootNode, file.fsPath);
@@ -75,10 +81,10 @@ export class ServiceProvider {
             service.registrations.push(reg);
             // Basic conflict: multiple impls for same service in same lifetime
             const lifetimeImpls = service.registrations
-              .filter(r => r.lifetime === reg.lifetime)
-              .map(r => r.implementationType);
+                .filter(r => r.lifetime === reg.lifetime)
+                .map(r => r.implementationType);
             if (new Set(lifetimeImpls).size > 1) {
-              service.hasConflicts = true;
+                service.hasConflicts = true;
             }
         }
 
@@ -92,9 +98,9 @@ export class ServiceProvider {
                 const lifetimeRegs = service.registrations.filter(r => r.lifetime === lifetime);
                 if (lifetimeRegs.length > 0) {
                     const lifeTimeService: Service = {
-                      ...service,
-                      registrations: lifetimeRegs,
-                      hasConflicts: new Set(lifetimeRegs.map(r => r.implementationType)).size > 1
+                        ...service,
+                        registrations: lifetimeRegs,
+                        hasConflicts: new Set(lifetimeRegs.map(r => r.implementationType)).size > 1
                     };
                     lifeTimeServices.push(lifeTimeService);
                 }
@@ -114,10 +120,10 @@ export class ServiceProvider {
 
     private getLifetimeColor(lifetime: Lifetime): string {
         switch (lifetime) {
-            case Lifetime.Singleton: return Colors.Singleton
-            case Lifetime.Scoped: return Colors.Scoped
-            case Lifetime.Transient: return Colors.Transient
-            default: return Colors.Default
+            case Lifetime.Singleton: return Colors.Singleton;
+            case Lifetime.Scoped: return Colors.Scoped;
+            case Lifetime.Transient: return Colors.Transient;
+            default: return Colors.Default;
         }
     }
 
