@@ -4,7 +4,15 @@
   "description": "Visualize and navigate your .NET Dependency Injection registrations inside VSCode.",
   "version": "0.0.1",
   "icon": "./icon.png",
-  "repository": {},
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chaluvadis/di-navigator"
+  },
+  "homepage": "https://github.com/chaluvadis/di-navigator",
+  "bugs": {
+    "url": "https://github.com/chaluvadis/di-navigator/issues"
+  },
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -35,7 +43,7 @@
         {
           "id": "diNavigator",
           "name": "DI Navigator",
-          "icon": "./icon/png"
+          "icon": "./icon.png"
         }
       ]
     }
