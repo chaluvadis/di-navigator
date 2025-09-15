@@ -1,25 +1,128 @@
 import TreeSitter from 'tree-sitter';
 import CSharp from 'tree-sitter-c-sharp';
 import { Registration, Lifetime, InjectionSite } from './models';
+import {
+  ADD_PREFIX, CONSTRUCTOR, FACTORY,
+  IDENTIFIER, PARAMETER,
+  REFERENCE, SCOPED_SUFFIX,
+  SERVICES, SINGLETON_SUFFIX,
+  TRANSIENT_SUFFIX, UNKNOWN
+} from './const';
+
+const isServicesChain = (node: any): boolean => {
+  if (node.type === 'identifier' && node.text.toLowerCase() === SERVICES) {
+    return true;
+  }
+  if (node.type === 'member_access_expression') {
+    const object = node.childForFieldName('object');
+    return !!object && isServicesChain(object);
+  }
+  return false;
+};
+
+const isValidDIMethod = (methodName: string): boolean =>
+  methodName.startsWith(ADD_PREFIX) &&
+  (methodName.endsWith(SINGLETON_SUFFIX) ||
+    methodName.endsWith(SCOPED_SUFFIX) ||
+    methodName.endsWith(TRANSIENT_SUFFIX));
+
+const getLifetimeFromMethod = (methodName: string): Lifetime => {
+  if (methodName.includes(SINGLETON_SUFFIX)) {
+    return Lifetime.Singleton;
+  } else if (methodName.includes(SCOPED_SUFFIX)) {
+    return Lifetime.Scoped;
+  } else {
+    return Lifetime.Transient;
+  }
+};
+
+const extractTypeArguments = (nameNode: any): { serviceType: string; implType: string } => {
+  const typeArgs = nameNode.childForFieldName('type_arguments');
+  let serviceType = UNKNOWN;
+  let implType = UNKNOWN;
+
+  if (typeArgs?.type === 'type_argument_list') {
+    const args = typeArgs.namedChildren;
+    if (args.length >= 2) {
+      serviceType = args[0].text ?? UNKNOWN;
+      implType = args[1].text ?? UNKNOWN;
+    } else if (args.length === 1) {
+      serviceType = args[0].text ?? UNKNOWN;
+      implType = serviceType;
+    }
+  }
+
+  return { serviceType, implType };
+};
+
+const extractImplFromArguments = (argList: any, serviceType: string): string => {
+  if (!argList || argList.namedChildren?.length === 0) {
+    return serviceType;
+  }
+
+  const firstArg = argList.namedChildren[0];
+  if (firstArg?.type !== 'argument') {
+    return serviceType;
+  }
+
+  const argValue = firstArg.namedChildren?.[0];
+  if (argValue?.type === 'new_expression') {
+    const constructorType = argValue.childForFieldName('constructor');
+    if (constructorType?.type === 'simple_type' || constructorType?.type === 'qualified_name') {
+      return constructorType.text ?? UNKNOWN;
+    }
+  } else if (argValue?.type === 'lambda_expression') {
+    return FACTORY;
+  } else if (argValue?.type === IDENTIFIER || argValue?.type === 'this_expression') {
+    return argValue.text ?? REFERENCE;
+  }
+
+  return serviceType;
+};
+
+const extractConstructorInjectionSites = (constructorNode: any, className: string, filePath: string): InjectionSite[] => {
+  const sites: InjectionSite[] = [];
+  const paramsNode = constructorNode.childForFieldName('parameters');
+  if (paramsNode?.type === 'parameter_list') {
+    for (const paramNode of paramsNode.namedChildren ?? []) {
+      if (paramNode.type === PARAMETER) {
+        const typeNode = paramNode.childForFieldName('type');
+        if (typeNode && (typeNode.type === 'simple_type' || typeNode.type === 'qualified_name')) {
+          const serviceType = typeNode.text ?? UNKNOWN;
+          const lineNumber = paramNode.startPosition.row + 1;
+          sites.push({
+            filePath,
+            lineNumber,
+            className,
+            memberName: constructorNode.text ?? CONSTRUCTOR,
+            type: 'constructor' as const,
+            serviceType
+          });
+        }
+      }
+    }
+  }
+  return sites;
+};
 
 const parser = { instance: null as any };
 
-export function initializeParser(): any {
+export const initializeParser = (): any => {
   if (!parser.instance) {
     parser.instance = new TreeSitter();
     parser.instance.setLanguage(CSharp);
   }
   return parser.instance;
-}
+};
 
-export function parseCsharp(sourceCode: string): any {
+export const parseCsharp = (sourceCode: string): any => {
   const p = initializeParser();
   const tree = p.parse(sourceCode);
   return tree.rootNode;
-}
+};
 
 // Extract DI registrations from syntax tree
-export function extractRegistrations(rootNode: any, filePath: string): Registration[] {
+export const extractRegistrations = (rootNode: any, filePath: string): Registration[] => {
   const registrations: Registration[] = [];
 
   function traverse(node: any) {
@@ -27,34 +130,28 @@ export function extractRegistrations(rootNode: any, filePath: string): Registrat
       const functionNode = node.childForFieldName('function');
       console.log(`Invocation function type: ${functionNode?.type}`); // Debug
       if (functionNode?.type === 'member_access_expression') {
-        const objectNode = functionNode.childForFieldName('object');
         const nameNode = functionNode.childForFieldName('name');
-        if (objectNode?.type === 'identifier' && objectNode.text === 'services' && nameNode?.type === 'generic_name') {
+        if (isServicesChain(functionNode) && nameNode?.type === 'generic_name') {
           const methodName = nameNode.text;
-          console.log(`Potential DI method: ${methodName}`); // Debug
-          if (methodName.startsWith('Add') && (methodName.endsWith('Singleton') || methodName.endsWith('Scoped') || methodName.endsWith('Transient'))) {
-            // Extract lifetime
-            let lifetime: Lifetime;
-            if (methodName.includes('Singleton')) { lifetime = Lifetime.Singleton; }
-            else if (methodName.includes('Scoped')) { lifetime = Lifetime.Scoped; }
-            else { lifetime = Lifetime.Transient; }
+          console.log(`Potential DI method on services: ${methodName}`); // Debug
+          if (isValidDIMethod(methodName)) {
+            const lifetime = getLifetimeFromMethod(methodName);
 
-            // Extract generic type arguments
-            const typeArgs = nameNode.childForFieldName('type_arguments');
-            if (typeArgs?.type === 'type_argument_list' && typeArgs.namedChildren?.length >= 2) {
-              const serviceType = typeArgs.namedChildren[0].text ?? 'Unknown';
-              const implType = typeArgs.namedChildren[1].text ?? 'Unknown';
+            const { serviceType, implType } = extractTypeArguments(nameNode);
 
-              console.log(`Found registration: ${serviceType} -> ${implType} (${lifetime})`); // Debug
-              registrations.push({
-                lifetime,
-                serviceType,
-                implementationType: implType,
-                filePath,
-                lineNumber: node.startPosition.row + 1,
-                methodCall: methodName
-              });
-            }
+            // Handle factory or instance arguments if needed
+            const argList = node.namedChildren?.find((child: any) => child.type === 'argument_list');
+            const finalImplType = extractImplFromArguments(argList, serviceType);
+
+            console.log(`Found registration: ${serviceType} -> ${finalImplType} (${lifetime})`); // Debug
+            registrations.push({
+              lifetime,
+              serviceType,
+              implementationType: finalImplType,
+              filePath,
+              lineNumber: node.startPosition.row + 1,
+              methodCall: methodName
+            });
           }
         }
       }
@@ -68,10 +165,10 @@ export function extractRegistrations(rootNode: any, filePath: string): Registrat
 
   traverse(rootNode);
   return registrations;
-}
+};
 
 // Extract injection sites (e.g., constructor parameters) from syntax tree
-export function extractInjectionSites(rootNode: any, filePath: string): InjectionSite[] {
+export const extractInjectionSites = (rootNode: any, filePath: string): InjectionSite[] => {
   const injectionSites: InjectionSite[] = [];
 
   function traverse(node: any) {
@@ -82,27 +179,8 @@ export function extractInjectionSites(rootNode: any, filePath: string): Injectio
       // Look for constructor
       const constructorNode = node.children?.find((child: any) => child.type === 'constructor_declaration');
       if (constructorNode) {
-        const paramsNode = constructorNode.childForFieldName('parameters');
-        if (paramsNode?.type === 'parameter_list') {
-          for (const paramNode of paramsNode.namedChildren ?? []) {
-            if (paramNode.type === 'parameter') {
-              const typeNode = paramNode.childForFieldName('type');
-              if (typeNode && (typeNode.type === 'simple_type' || typeNode.type === 'qualified_name')) {
-                const serviceType = typeNode.text ?? 'UnknownType';
-                const lineNumber = paramNode.startPosition.row + 1;
-
-                injectionSites.push({
-                  filePath,
-                  lineNumber,
-                  className,
-                  memberName: constructorNode.text ?? 'constructor',
-                  type: 'constructor' as const,
-                  serviceType
-                });
-              }
-            }
-          }
-        }
+        const sites = extractConstructorInjectionSites(constructorNode, className, filePath);
+        injectionSites.push(...sites);
       }
 
       // Recurse for nested classes or methods (basic: only class level)
@@ -114,6 +192,4 @@ export function extractInjectionSites(rootNode: any, filePath: string): Injectio
 
   traverse(rootNode);
   return injectionSites;
-}
-
-// Future: Enhanced traversal for extension methods, attributes, etc.
+};

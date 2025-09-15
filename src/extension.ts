@@ -1,17 +1,22 @@
-import { ExtensionContext, workspace, window } from 'vscode';
+import { ExtensionContext, workspace, window, commands } from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
 import { registerCommands } from './commands';
+import { CONFIG_EXCLUDE_FOLDERS, CONFIG_SECTION, DEFAULT_EXCLUDE_FOLDERS, NET_FILE_PATTERNS, VALID_WORKSPACE_CONTEXT } from './const';
 
-async function detectNetWorkspace(): Promise<boolean> {
+function getExcludeGlob(fallbackPatterns: readonly string[]): string {
+  const config = workspace.getConfiguration(CONFIG_SECTION);
+  const patterns = config.get<string[]>(CONFIG_EXCLUDE_FOLDERS) || Array.from(fallbackPatterns);
+  return patterns.join(', ');
+}
+export async function detectNetWorkspace(): Promise<boolean> {
   try {
-    const config = workspace.getConfiguration('diNavigator');
-    const excludePatterns = config.get<string[]>('excludeFolders') || ['**/bin/**', '**/obj/**', '**/Properties/**'];
-    const excludeGlob = excludePatterns.join(', ');
-    const csprojFiles = await workspace.findFiles('**/*.csproj', excludeGlob);
-    const slnFiles = await workspace.findFiles('**/*.sln', excludeGlob);
-    const slnxFiles = await workspace.findFiles('**/*.slnx', excludeGlob);
-    return csprojFiles.length > 0 || slnFiles.length > 0 || slnxFiles.length > 0;
+    const excludeGlob = getExcludeGlob(DEFAULT_EXCLUDE_FOLDERS);
+    const csprojFiles = await workspace.findFiles(NET_FILE_PATTERNS[0], excludeGlob);
+    const slnFiles = await workspace.findFiles(NET_FILE_PATTERNS[1], excludeGlob);
+    const slnxFiles = await workspace.findFiles(NET_FILE_PATTERNS[2], excludeGlob);
+    const csFiles = await workspace.findFiles(NET_FILE_PATTERNS[3], excludeGlob);
+    return csprojFiles.length > 0 || slnFiles.length > 0 || slnxFiles.length > 0 || csFiles.length > 0;
   } catch (error) {
     console.error('Error detecting .NET workspace:', error);
     return false;
@@ -28,33 +33,41 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const treeViewDisposable = window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
   context.subscriptions.push(treeViewDisposable);
 
-  // Detect if this is a .NET workspace
-  const isNet = await detectNetWorkspace();
-  if (isNet) {
-    console.log('.NET workspace detected. DI services will be analyzed.');
-    // Initial analysis
-    await serviceProvider.collectRegistrations();
-    diNavigatorProvider.refresh();
-  } else {
-    console.log('Non-.NET workspace. DI analysis disabled.');
-  }
-
-  // Watch for .cs file changes to refresh
-  const csWatcher = workspace.createFileSystemWatcher('**/*.cs');
-  csWatcher.onDidChange(async () => {
+  // Function to update workspace context and state
+  const updateWorkspaceContext = async (): Promise<void> => {
     const isNet = await detectNetWorkspace();
+    await commands.executeCommand('setContext', VALID_WORKSPACE_CONTEXT, isNet);
     if (isNet) {
-      await serviceProvider.refresh();
+      console.log('.NET workspace detected. Refreshing DI services.');
+      await serviceProvider.collectRegistrations();
+      diNavigatorProvider.refresh();
+    } else {
+      console.log('Non-.NET workspace. Clearing DI analysis.');
+      serviceProvider.clearState();
       diNavigatorProvider.refresh();
     }
+  };
+
+  // Initial detection and setup
+  await updateWorkspaceContext();
+
+  // Watch for relevant file changes to update context and refresh
+  const excludeGlob = getExcludeGlob(DEFAULT_EXCLUDE_FOLDERS);
+
+  NET_FILE_PATTERNS.forEach(pattern => {
+    const watcher = workspace.createFileSystemWatcher(pattern);
+    watcher.onDidCreate(async () => await updateWorkspaceContext());
+    watcher.onDidDelete(async () => await updateWorkspaceContext());
+    watcher.onDidChange(async () => await updateWorkspaceContext());
+    context.subscriptions.push(watcher);
   });
-  context.subscriptions.push(csWatcher);
 
   // Register commands
   registerCommands(context);
-  window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
 }
 
 export function deactivate() {
   serviceProvider.clearState();
+  // Refresh to clear the tree view
+  diNavigatorProvider.refresh();
 }

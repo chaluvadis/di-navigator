@@ -21,26 +21,29 @@
     "Programming Languages",
     "Visualization"
   ],
-  "activationEvents": [
-    "onLanguage:csharp",
-    "onWorkspaceContains:*.csproj",
-    "onWorkspaceContains:*.sln",
-    "onWorkspaceContains:*.slnx"
-  ],
+  "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
+        "command": "di-navigator.selectProject",
+        "title": "DI Navigator: Select Project"
+      },
+      {
+        "command": "di-navigator.clearProjectSelection",
+        "title": "DI Navigator: Clear Project Selection"
+      },
+      {
         "command": "di-navigator.refreshServices",
-        "title": "Refresh DI Services"
+        "title": "DI Navigator: Refresh Services"
       },
       {
         "command": "di-navigator.goToImplementation",
-        "title": "Go to DI Implementation"
+        "title": "DI Navigator: Go to Implementation"
       },
       {
-        "command": "di-navigator.selectProject",
-        "title": "Select Project for DI Analysis"
+        "command": "di-navigator.goToInjectionSite",
+        "title": "DI Navigator: Go to Injection Site"
       }
     ],
     "views": {
@@ -48,7 +51,8 @@
         {
           "id": "diNavigator",
           "name": "DI Navigator",
-          "icon": "./icon.png"
+          "icon": "./icon.png",
+          "when": "diNavigator:validWorkspace"
         }
       ]
     }
@@ -96,7 +100,9 @@
     "eslint": "^9.35.0",
     "npm-run-all": "^4.1.5",
     "tree-sitter": "^0.21.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "sinon": "^17.0.1",
+    "@types/sinon": "^17.0.3"
   },
   "dependencies": {
     "tree-sitter-c-sharp": "^0.23.1"

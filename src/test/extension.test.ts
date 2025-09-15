@@ -1,7 +1,8 @@
-import * as assert from 'assert';
+import assert from 'assert';
 import * as vscode from 'vscode';
 import { Uri, CancellationToken } from 'vscode';
 import * as extension from '../extension';
+import sinon from 'sinon';
 
 suite('Extension Test Suite', () => {
 	vscode.window.showInformationMessage('Start all tests.');
@@ -111,5 +112,191 @@ suite('Extension Test Suite', () => {
 
 		vscode.workspace.findFiles = originalFindFiles;
 		vscode.workspace.getConfiguration = originalGetConfiguration;
+	});
+});
+suite('Parser Helpers Tests', () => {
+	const { isServicesChain, isValidDIMethod,
+		getLifetimeFromMethod,
+		extractTypeArguments, extractImplFromArguments,
+		extractConstructorInjectionSites } = require('../parser');
+	const { Lifetime } = require('../models');
+
+	test('isServicesChain identifies services identifier', () => {
+		const node = { type: 'identifier', text: 'services' };
+		assert.strictEqual(isServicesChain(node), true);
+	});
+
+	test('isServicesChain does not identify non-services', () => {
+		const node = { type: 'identifier', text: 'other' };
+		assert.strictEqual(isServicesChain(node), false);
+	});
+
+	test('isServicesChain identifies member access to services', () => {
+		const nameNode = { type: 'identifier', text: 'AddScoped' };
+		const functionNode = {
+			type: 'member_access_expression',
+			childForFieldName: (field: string) => field === 'name' ? nameNode : { type: 'identifier', text: 'services' }
+		};
+		assert.strictEqual(isServicesChain(functionNode), true);
+	});
+
+	test('isValidDIMethod detects AddSingleton', () => {
+		assert.strictEqual(isValidDIMethod('AddSingleton'), true);
+		assert.strictEqual(isValidDIMethod('AddScoped'), true);
+		assert.strictEqual(isValidDIMethod('AddTransient'), true);
+		assert.strictEqual(isValidDIMethod('AddSomethingElse'), false);
+	});
+
+	test('getLifetimeFromMethod returns correct lifetime', () => {
+		assert.strictEqual(getLifetimeFromMethod('AddSingleton'), Lifetime.Singleton);
+		assert.strictEqual(getLifetimeFromMethod('AddScoped'), Lifetime.Scoped);
+		assert.strictEqual(getLifetimeFromMethod('AddTransient'), Lifetime.Transient);
+	});
+
+	test('extractTypeArguments handles two args', () => {
+		const nameNode = {
+			childForFieldName: (field: string) => field === 'type_arguments' ? {
+				type: 'type_argument_list',
+				namedChildren: [{ text: 'IService' }, { text: 'Service' }]
+			} : null
+		};
+		const result = extractTypeArguments(nameNode);
+		assert.strictEqual(result.serviceType, 'IService');
+		assert.strictEqual(result.implType, 'Service');
+	});
+
+	test('extractTypeArguments handles single arg self-registration', () => {
+		const nameNode = {
+			childForFieldName: (field: string) => field === 'type_arguments' ? {
+				type: 'type_argument_list',
+				namedChildren: [{ text: 'Service' }]
+			} : null
+		};
+		const result = extractTypeArguments(nameNode);
+		assert.strictEqual(result.serviceType, 'Service');
+		assert.strictEqual(result.implType, 'Service');
+	});
+
+	test('extractTypeArguments handles no args', () => {
+		const nameNode = { childForFieldName: () => null };
+		const result = extractTypeArguments(nameNode);
+		assert.strictEqual(result.serviceType, 'Unknown');
+		assert.strictEqual(result.implType, 'Unknown');
+	});
+
+	test('extractImplFromArguments handles new_expression', () => {
+		const argList = {
+			namedChildren: [{
+				type: 'argument',
+				namedChildren: [{
+					type: 'new_expression',
+					childForFieldName: (field: string) => field === 'constructor' ? { type: 'simple_type', text: 'MyService' } : null
+				}]
+			}]
+		};
+		const result = extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'MyService');
+	});
+
+	test('extractImplFromArguments handles lambda factory', () => {
+		const argList = {
+			namedChildren: [{
+				type: 'argument',
+				namedChildren: [{ type: 'lambda_expression' }]
+			}]
+		};
+		const result = extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'Factory');
+	});
+
+	test('extractImplFromArguments handles identifier reference', () => {
+		const argList = {
+			namedChildren: [{
+				type: 'argument',
+				namedChildren: [{ type: 'identifier', text: 'someService' }]
+			}]
+		};
+		const result = extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'someService');
+	});
+
+	test('extractImplFromArguments falls back to serviceType', () => {
+		const argList = { namedChildren: [] };
+		const result = extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'IService');
+	});
+
+	test('extractConstructorInjectionSites extracts params', () => {
+		const constructorNode = {
+			childForFieldName: (field: string) => field === 'parameters' ? {
+				type: 'parameter_list',
+				namedChildren: [{
+					type: 'parameter',
+					childForFieldName: (f: string) => f === 'type' ? { type: 'simple_type', text: 'IService' } : null,
+					startPosition: { row: 10 }
+				}]
+			} : null,
+			text: 'ctor'
+		};
+		const sites = extractConstructorInjectionSites(constructorNode, 'MyClass', '/path/to/file.cs');
+		assert.strictEqual(sites.length, 1);
+		assert.strictEqual(sites[0].serviceType, 'IService');
+		assert.strictEqual(sites[0].lineNumber, 11);
+		assert.strictEqual(sites[0].className, 'MyClass');
+		assert.strictEqual(sites[0].memberName, 'ctor');
+	});
+
+	test('extractConstructorInjectionSites handles no params', () => {
+		const constructorNode = { childForFieldName: () => null, text: 'ctor' };
+		const sites = extractConstructorInjectionSites(constructorNode, 'MyClass', '/path/to/file.cs');
+		assert.strictEqual(sites.length, 0);
+	});
+});
+
+suite('Activation and View Visibility Tests', () => {
+	const { activate } = require('../extension');
+	const { commands } = require('vscode');
+	const { serviceProvider } = require('../serviceProvider');
+
+	test('activation sets context true for .NET workspace', async () => {
+		const originalFindFiles = vscode.workspace.findFiles;
+		vscode.workspace.findFiles = async () => [vscode.Uri.file('test.csproj')];
+
+		const setContextStub = sinon.stub(commands, 'executeCommand');
+		const collectStub = sinon.stub(serviceProvider, 'collectRegistrations').resolves();
+		const clearStub = sinon.stub(serviceProvider, 'clearState').resolves();
+
+		const context = { subscriptions: [] };
+		await activate(context);
+
+		sinon.assert.calledWith(setContextStub, sinon.match('setContext'), 'diNavigator:validWorkspace', true);
+		sinon.assert.calledOnce(collectStub);
+		sinon.assert.notCalled(clearStub);
+
+		vscode.workspace.findFiles = originalFindFiles;
+		setContextStub.restore();
+		collectStub.restore();
+		clearStub.restore();
+	});
+
+	test('activation sets context false for non-.NET workspace', async () => {
+		const originalFindFiles = vscode.workspace.findFiles;
+		vscode.workspace.findFiles = async () => [];
+
+		const setContextStub = sinon.stub(commands, 'executeCommand');
+		const collectStub = sinon.stub(serviceProvider, 'collectRegistrations').resolves();
+		const clearStub = sinon.stub(serviceProvider, 'clearState').resolves();
+
+		const context = { subscriptions: [] };
+		await activate(context);
+
+		sinon.assert.calledWith(setContextStub, sinon.match('setContext'), 'diNavigator:validWorkspace', false);
+		sinon.assert.notCalled(collectStub);
+		sinon.assert.calledOnce(clearStub);
+
+		vscode.workspace.findFiles = originalFindFiles;
+		setContextStub.restore();
+		collectStub.restore();
+		clearStub.restore();
 	});
 });
