@@ -1,7 +1,14 @@
 import { ExtensionContext, Uri, workspace, RelativePattern } from 'vscode';
 import * as CONSTANTS from './const';
-import { ServiceGroup, Service, Registration, Lifetime, Colors, InjectionSite } from './models';
-import { parseCsharp, extractRegistrations, extractInjectionSites } from './parser';
+import {
+  ServiceGroup, Service, Registration,
+  Lifetime, Colors, InjectionSite
+} from './models';
+import {
+  parseCsharp,
+  extractRegistrations,
+  extractInjectionSites
+} from './parser';
 import path from 'path';
 export class ServiceProvider {
   private serviceGroups: ServiceGroup[] = [];
@@ -60,10 +67,10 @@ export class ServiceProvider {
         const document = await workspace.openTextDocument(file);
         const sourceCode = document.getText();
         const rootNode = parseCsharp(sourceCode);
-        const fileRegs = extractRegistrations(rootNode, file.fsPath);
+        const fileRegs = extractRegistrations(rootNode, file.fsPath, sourceCode);
         totalRegs += fileRegs.length;
         registrations.push(...fileRegs);
-        const fileSites = extractInjectionSites(rootNode, file.fsPath);
+        const fileSites = extractInjectionSites(rootNode, file.fsPath, sourceCode);
         totalSites += fileSites.length;
         allInjectionSites.push(...fileSites);
         if (fileRegs.length > 0) {

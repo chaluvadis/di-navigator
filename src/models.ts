@@ -1,7 +1,9 @@
+import { QuickPickItem, Uri } from "vscode";
+
 export const enum Lifetime {
-  Singleton = 'Singleton',
-  Scoped = 'Scoped',
-  Transient = 'Transient'
+    Singleton = 'Singleton',
+    Scoped = 'Scoped',
+    Transient = 'Transient'
 }
 
 export interface Registration {
@@ -42,8 +44,16 @@ export interface Conflict {
 }
 
 export const enum Colors {
-  Singleton = '#FF5722',
-  Scoped = '#2196F3',
-  Transient = '#4CAF50',
-  Default = '#9E9E9E'
+    Singleton = '#FF5722',
+    Scoped = '#2196F3',
+    Transient = '#4CAF50',
+    Default = '#9E9E9E'
+}
+
+export interface PickItem extends QuickPickItem {
+    registration: Registration;
+}
+
+export interface ProjectItem extends QuickPickItem {
+    uri: Uri;
 }

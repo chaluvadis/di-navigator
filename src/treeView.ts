@@ -1,7 +1,11 @@
 import { TreeItem, TreeDataProvider, EventEmitter, TreeItemCollapsibleState, ThemeIcon, ProviderResult } from 'vscode';
-import * as CONSTANTS from './const';
 import { ServiceGroup, Service, InjectionSite } from './models';
 import { serviceProvider } from './serviceProvider';
+import {
+  ICON_FOLDER, ICON_CLASS, ICON_WARNING,
+  COMMAND_GO_TO_IMPL, TITLE_GO_TO_IMPL, ICON_METHOD,
+  COMMAND_GO_TO_SITE, TITLE_GO_TO_SITE
+} from './const';
 
 const isServiceGroup = (element: any): element is ServiceGroup =>
   element?.lifetime !== undefined && Array.isArray(element.services);
@@ -21,30 +25,30 @@ export class DINavigatorProvider implements TreeDataProvider<TreeItem | ServiceG
     if (isServiceGroup(element)) {
       const groupItem = new TreeItem(element.lifetime, TreeItemCollapsibleState.Collapsed);
       groupItem.description = `${element.services.length} services`;
-      groupItem.iconPath = new ThemeIcon(CONSTANTS.ICON_FOLDER);
+      groupItem.iconPath = new ThemeIcon(ICON_FOLDER);
       groupItem.resourceUri = undefined;
       return groupItem;
     } else if (isService(element)) {
       const serviceItem = new TreeItem(element.name, TreeItemCollapsibleState.Collapsed);
       serviceItem.description = `${element.registrations.length} registrations${element.injectionSites?.length ? `, ${element.injectionSites.length} injection sites` : ''}`;
-      serviceItem.iconPath = new ThemeIcon(CONSTANTS.ICON_CLASS);
+      serviceItem.iconPath = new ThemeIcon(ICON_CLASS);
       if (element.hasConflicts) {
-        serviceItem.iconPath = new ThemeIcon(CONSTANTS.ICON_WARNING);
+        serviceItem.iconPath = new ThemeIcon(ICON_WARNING);
       }
       // Command for navigation
       serviceItem.command = {
-        command: CONSTANTS.COMMAND_GO_TO_IMPL,
-        title: CONSTANTS.TITLE_GO_TO_IMPL,
+        command: COMMAND_GO_TO_IMPL,
+        title: TITLE_GO_TO_IMPL,
         arguments: [element]
       };
       return serviceItem;
     } else if (isInjectionSite(element)) {
       const siteItem = new TreeItem(`${element.className}.${element.memberName} (${element.serviceType})`, TreeItemCollapsibleState.None);
       siteItem.description = `Line ${element.lineNumber}`;
-      siteItem.iconPath = new ThemeIcon(CONSTANTS.ICON_METHOD);
+      siteItem.iconPath = new ThemeIcon(ICON_METHOD);
       siteItem.command = {
-        command: CONSTANTS.COMMAND_GO_TO_SITE,
-        title: CONSTANTS.TITLE_GO_TO_SITE,
+        command: COMMAND_GO_TO_SITE,
+        title: TITLE_GO_TO_SITE,
         arguments: [element]
       };
       return siteItem;

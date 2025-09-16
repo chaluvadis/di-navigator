@@ -13,7 +13,7 @@ export const MESSAGE_NO_IMPL = 'No implementation found for this service.';
 export const PLACEHOLDER_SELECT_PROJECT = 'Select project for DI analysis';
 export const TITLE_GO_TO_IMPL = 'Go to Implementation';
 export const TITLE_GO_TO_SITE = 'Go to Injection Site';
-export const VALID_WORKSPACE_CONTEXT = 'diNavigator=validWorkspace';
+export const VALID_WORKSPACE_CONTEXT = 'diNavigator:validWorkspace';
 export const DEFAULT_EXCLUDE_FOLDERS = ['**/bin/**', '**/obj/**', '**/Properties/**'];
 export const NET_FILE_PATTERNS = ['**/*.csproj', '**/*.sln', '**/*.slnx', '**/*.cs'];
 export const CONFIG_SECTION = 'diNavigator';

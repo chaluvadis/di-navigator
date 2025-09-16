@@ -21,7 +21,11 @@
     "Programming Languages",
     "Visualization"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:**/*.csproj",
+    "workspaceContains:**/*.sln"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
