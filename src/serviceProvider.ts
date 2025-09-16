@@ -42,9 +42,13 @@ export class ServiceProvider {
     this.cache.clear();
   }
 
-  private async parseFile(filePath: string): Promise<{ registrations: Registration[]; injectionSites: InjectionSite[]; }> {
+  private async parseFile(filePath: string): Promise<{
+    registrations: Registration[];
+    injectionSites: InjectionSite[];
+  }> {
     const document = await workspace.openTextDocument(filePath);
     const sourceCode = document.getText();
+    console.log(`Parsing file ${filePath} with JS parser`);
     const regs = extractRegistrations(filePath, sourceCode);
     const sites = extractInjectionSites(filePath, sourceCode);
     return { registrations: regs, injectionSites: sites };
@@ -59,18 +63,41 @@ export class ServiceProvider {
     const excludeGlob = this.getExcludeGlob();
 
     const allProjectDirs: string[] = [];
-    try {
-      const csprojFiles = await workspace.findFiles('**/*.csproj', excludeGlob);
-      const slnFiles = await workspace.findFiles('**/*.sln', excludeGlob);
-      const allFiles = [...csprojFiles, ...slnFiles];
-      const uniqueDirs = new Set(allFiles.map(f => path.dirname(f.fsPath)));
-      uniqueDirs.forEach(d => allProjectDirs.push(d));
-    } catch (error) {
-      console.error('Error finding projects:', error);
+    if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
+      console.warn('No workspace folders found.');
+      return;
     }
 
-    if (allProjectDirs.length === 0 && workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
-      allProjectDirs.push(workspace.workspaceFolders[0].uri.fsPath);
+    for (const folder of workspace.workspaceFolders) {
+      const folderPath = folder.uri.fsPath;
+      try {
+        const projectPattern = new RelativePattern(folder, '**/*.{csproj,sln}');
+        const projectFiles = await workspace.findFiles(projectPattern, excludeGlob);
+
+        const slnFiles = projectFiles.filter(f => f.fsPath.endsWith('.sln'));
+        const csprojFiles = projectFiles.filter(f => f.fsPath.endsWith('.csproj'));
+        console.log(`Found ${slnFiles.length} solution files and ${csprojFiles.length} project files in folder ${folder.name}`);
+        console.log('Solution files:', slnFiles.map(f => f.fsPath));
+        console.log('Project files:', csprojFiles.map(f => f.fsPath));
+        const slnDirs = [...new Set(slnFiles.map(f => path.dirname(f.fsPath)))];
+        const csprojDirs = csprojFiles.map(f => path.dirname(f.fsPath));
+
+        // Filter csproj dirs that are under sln dirs within this folder
+        const filteredCsprojDirs = csprojDirs.filter(dir => !slnDirs.some(slnDir => {
+          const rel = path.relative(slnDir, dir);
+          return rel !== '' && !rel.startsWith('..');
+        }));
+
+        // For sln, use the sln dir; for standalone csproj, use their dir
+        const rootProjectDirs = [...slnDirs, ...filteredCsprojDirs].map(dir => path.resolve(folderPath, path.relative(folderPath, dir)));
+        allProjectDirs.push(...rootProjectDirs);
+      } catch (error) {
+        console.error(`Error finding projects in folder ${folderPath}:`, error);
+      }
+    }
+
+    if (allProjectDirs.length === 0) {
+      console.warn('No .NET projects found in workspace folders.');
     }
 
     const projectDI: ProjectDI[] = [];
@@ -123,7 +150,6 @@ export class ServiceProvider {
       console.log(`Project ${projectName}: ${projectTotalFiles} files, ${projectTotalRegs} registrations, ${projectTotalSites} sites`);
       if (projectTotalRegs === 0) {
         console.warn(`No DI registrations found in project ${projectName}.`);
-        continue;
       }
 
       // Group into services for this project
@@ -249,14 +275,14 @@ export class ServiceProvider {
   }
 
   getProjectDI(): ProjectDI[] {
-  	return this.projectDI;
+    return this.projectDI;
   }
- 
+
   invalidateFile(filePath: string): void {
-  	this.dirty = true;
-  	this.cache.clear();
-  	this.allServices = [];
-  	console.log(`Invalidated cache due to change in ${filePath}`);
+    this.dirty = true;
+    this.cache.clear();
+    this.allServices = [];
+    console.log(`Invalidated cache due to change in ${filePath}`);
   }
 
   getServiceGroups(): ServiceGroup[] {

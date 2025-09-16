@@ -1,9 +1,11 @@
-﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using System.CommandLine;
+﻿using System.CommandLine;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace roslyn_di_analyzer;
 
@@ -61,6 +63,7 @@ class Program
         return await rootCommand.InvokeAsync(args);
     }
 
+    [RequiresAssemblyFiles("Calls System.Reflection.Assembly.Location")]
     static async Task<AnalysisResult> AnalyzeFile(string filePath)
     {
         var result = new AnalysisResult();
@@ -72,55 +75,38 @@ class Program
 
         var model = compilation.GetSemanticModel(tree);
 
+        compilation = compilation.AddReferences(
+            MetadataReference.CreateFromFile(typeof(IServiceCollection).Assembly.Location)
+        );
+
         var root = tree.GetRoot();
 
-        // Extract registrations: services.AddScoped<...>(...)
+        // Extract registrations semantically
         var methodInvocations = root.DescendantNodes().OfType<InvocationExpressionSyntax>();
         foreach (var invocation in methodInvocations)
         {
-            if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
-                memberAccess.Expression.ToString() == "services")
+            var symbolInfo = model.GetSymbolInfo(invocation.Expression);
+            var methodSymbol = symbolInfo.Symbol as IMethodSymbol;
+            if (methodSymbol != null &&
+                methodSymbol.Name.StartsWith("Add") &&
+                (methodSymbol.Name.EndsWith("Singleton") || methodSymbol.Name.EndsWith("Scoped") || methodSymbol.Name.EndsWith("Transient")) &&
+                methodSymbol.ContainingType.Name == "IServiceCollection" &&
+                methodSymbol.ContainingType.ContainingNamespace.Name == "Microsoft.Extensions.DependencyInjection")
             {
-                var methodName = memberAccess.Name.Identifier.Text;
-                if (methodName.StartsWith("Add") && (methodName.EndsWith("Singleton") || methodName.EndsWith("Scoped") || methodName.EndsWith("Transient")))
-                {
-                    var lifetime = methodName.EndsWith("Singleton") ? "Singleton" : methodName.EndsWith("Scoped") ? "Scoped" : "Transient";
-                    string serviceType = "";
-                    string implType = "";
-                    if (memberAccess.Name is GenericNameSyntax genericName && genericName.TypeArgumentList != null)
-                    {
-                        var typeArgs = genericName.TypeArgumentList.Arguments;
-                        if (typeArgs.Count > 0)
-                        {
-                            serviceType = typeArgs[0].ToString();
-                            if (typeArgs.Count > 1)
-                            {
-                                implType = typeArgs[1].ToString();
-                            }
-                            else
-                            {
-                                implType = serviceType;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Non-generic, e.g., AddScoped<UserService>()
-                        serviceType = memberAccess.Name.ToString();
-                        implType = serviceType;
-                    }
-                    var lineNumber = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                var lifetime = methodSymbol.Name.EndsWith("Singleton") ? "Singleton" : methodSymbol.Name.EndsWith("Scoped") ? "Scoped" : "Transient";
+                string serviceType = methodSymbol.TypeArguments.Length > 0 ? methodSymbol.TypeArguments[0].ToDisplayString() : "";
+                string implType = methodSymbol.TypeArguments.Length > 1 ? methodSymbol.TypeArguments[1].ToDisplayString() : serviceType;
+                var lineNumber = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
 
-                    result.Registrations.Add(new Registration
-                    {
-                        Lifetime = lifetime,
-                        ServiceType = serviceType,
-                        ImplementationType = implType,
-                        FilePath = filePath,
-                        LineNumber = lineNumber,
-                        MethodCall = methodName
-                    });
-                }
+                result.Registrations.Add(new Registration
+                {
+                    Lifetime = lifetime,
+                    ServiceType = serviceType,
+                    ImplementationType = implType,
+                    FilePath = filePath,
+                    LineNumber = lineNumber,
+                    MethodCall = methodSymbol.Name
+                });
             }
         }
 

@@ -1,4 +1,8 @@
-import { ExtensionContext, workspace, window, commands, ProgressLocation } from 'vscode';
+import {
+  ExtensionContext,
+  workspace, window,
+  commands, ProgressLocation
+} from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
 import { registerCommands } from './commands';
@@ -8,6 +12,13 @@ import {
   VALID_WORKSPACE_CONTEXT
 } from './const';
 
+const debounce = (func: Function, delay: number) => {
+  let timeoutId: NodeJS.Timeout;
+  return (...args: any[]) => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => func.apply(null, args), delay);
+  };
+};
 function getExcludeGlob(fallbackPatterns: readonly string[]): string {
   const config = workspace.getConfiguration(CONFIG_SECTION);
   const patterns = config.get<string[]>(CONFIG_EXCLUDE_FOLDERS) || Array.from(fallbackPatterns);
@@ -67,15 +78,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // Initial detection and setup (do not block activation; run scan in background)
   // Kick off detection/scan but don't await here so the extension activates quickly.
   updateWorkspaceContext().catch(err => console.error('Error during initial workspace detection:', err));
+// Watch for relevant file changes to update context and refresh
 
-  // Watch for relevant file changes to update context and refresh
-  const excludeGlob = getExcludeGlob(DEFAULT_EXCLUDE_FOLDERS);
+  const debouncedUpdate = debounce(updateWorkspaceContext, 500); // 500ms debounce
 
   NET_FILE_PATTERNS.forEach(pattern => {
     const watcher = workspace.createFileSystemWatcher(pattern);
-    watcher.onDidCreate(async () => await updateWorkspaceContext());
-    watcher.onDidDelete(async () => await updateWorkspaceContext());
-    watcher.onDidChange(async () => await updateWorkspaceContext());
+    watcher.onDidCreate(debouncedUpdate);
+    watcher.onDidDelete(debouncedUpdate);
+    watcher.onDidChange(debouncedUpdate);
     context.subscriptions.push(watcher);
   });
 

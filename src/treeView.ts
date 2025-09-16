@@ -2,18 +2,13 @@ import {
   TreeItem, TreeDataProvider, EventEmitter,
   TreeItemCollapsibleState, ThemeIcon, ProviderResult
 } from 'vscode';
-import { ProjectDI, ServiceGroup, Service, InjectionSite, Conflict } from './models';
+import { ProjectDI, ServiceGroup, Service, InjectionSite, Conflict, ConflictItem } from './models';
 import { serviceProvider } from './serviceProvider';
 import {
   ICON_FOLDER, ICON_CLASS, ICON_WARNING,
   COMMAND_GO_TO_IMPL, TITLE_GO_TO_IMPL, ICON_METHOD,
   COMMAND_GO_TO_SITE, TITLE_GO_TO_SITE
 } from './const';
-
-interface ConflictItem {
-  type: string;
-  details: string;
-}
 
 const getConflictItems = (conflicts: Conflict[]): ConflictItem[] => {
   return conflicts.map(conflict => ({
@@ -47,7 +42,10 @@ export class DINavigatorProvider implements TreeDataProvider<TreeItem | ProjectD
       const projectItem = new TreeItem(element.projectName, TreeItemCollapsibleState.Collapsed);
       let totalServices = 0;
       element.serviceGroups.forEach(g => totalServices += g.services.length);
-      projectItem.description = `${element.serviceGroups.length} lifetimes, ${totalServices} services`;
+      const desc = totalServices > 0
+        ? `${element.serviceGroups.length} lifetimes, ${totalServices} services`
+        : 'No registrations found';
+      projectItem.description = desc;
       projectItem.iconPath = new ThemeIcon('file-directory');
       projectItem.tooltip = element.projectPath;
       return projectItem;
@@ -111,7 +109,7 @@ export class DINavigatorProvider implements TreeDataProvider<TreeItem | ProjectD
   }
 
   async refresh(): Promise<void> {
-    await serviceProvider.refresh();
+    // Avoid double scan; just fire event to refresh TreeView from current data
     this._onDidChangeTreeData.fire(undefined);
   }
 }

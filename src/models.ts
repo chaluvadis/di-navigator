@@ -65,3 +65,8 @@ export interface PickItem extends QuickPickItem {
 export interface ProjectItem extends QuickPickItem {
     uri: Uri;
 }
+
+export interface ConflictItem {
+    type: string;
+    details: string;
+}

@@ -21,3 +21,4 @@ tools/**
 out/**
 .vscode-test/**
 node_modules/**
+di-navigator.sln
