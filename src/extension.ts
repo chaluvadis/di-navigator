@@ -2,7 +2,11 @@ import { ExtensionContext, workspace, window, commands } from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
 import { registerCommands } from './commands';
-import { CONFIG_EXCLUDE_FOLDERS, CONFIG_SECTION, DEFAULT_EXCLUDE_FOLDERS, NET_FILE_PATTERNS, VALID_WORKSPACE_CONTEXT } from './const';
+import {
+  CONFIG_EXCLUDE_FOLDERS, CONFIG_SECTION,
+  DEFAULT_EXCLUDE_FOLDERS, NET_FILE_PATTERNS,
+  VALID_WORKSPACE_CONTEXT
+} from './const';
 
 function getExcludeGlob(fallbackPatterns: readonly string[]): string {
   const config = workspace.getConfiguration(CONFIG_SECTION);

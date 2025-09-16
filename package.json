@@ -1,7 +1,7 @@
 {
   "name": "di-service-navigator",
-  "displayName": "di-service-navigator",
-  "description": "Visualize and navigate your .NET Dependency Injection registrations inside VSCode.",
+  "displayName": "DI Service Navigator",
+  "description": "Visualize and explore Dependency Injection registrations and injection sites in your C# projects",
   "version": "0.0.1",
   "icon": "./icon.png",
   "license": "MIT",
@@ -48,6 +48,10 @@
       {
         "command": "di-navigator.goToInjectionSite",
         "title": "DI Navigator: Go to Injection Site"
+      },
+      {
+        "command": "di-navigator.resolveConflicts",
+        "title": "DI Navigator: Resolve Conflicts"
       }
     ],
     "views": {
@@ -94,21 +98,15 @@
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "22.x",
+    "@types/node": "24.5.0",
     "@types/vscode": "^1.104.0",
-    "@typescript-eslint/eslint-plugin": "^8.43.0",
-    "@typescript-eslint/parser": "^8.43.0",
-    "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2",
+    "@typescript-eslint/eslint-plugin": "^8.44.0",
+    "@typescript-eslint/parser": "^8.44.0",
     "esbuild": "^0.25.9",
     "eslint": "^9.35.0",
     "npm-run-all": "^4.1.5",
-    "tree-sitter": "^0.21.0",
     "typescript": "^5.9.2",
-    "sinon": "^17.0.1",
-    "@types/sinon": "^17.0.3"
-  },
-  "dependencies": {
-    "tree-sitter-c-sharp": "^0.23.1"
+    "sinon": "^17.0.2",
+    "@types/sinon": "^17.0.4"
   }
 }

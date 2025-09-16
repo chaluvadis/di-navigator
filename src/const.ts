@@ -23,7 +23,6 @@ export const ICON_CLASS = 'symbol-class';
 export const ICON_WARNING = 'warning';
 export const ICON_METHOD = 'symbol-method';
 export const LIFETIMES = [Lifetime.Singleton, Lifetime.Scoped, Lifetime.Transient];
-
 export const SERVICES = 'services';
 export const ADD_PREFIX = 'Add';
 export const SINGLETON_SUFFIX = 'Singleton';

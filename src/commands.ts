@@ -1,5 +1,8 @@
-import { commands, workspace, window, ExtensionContext, Uri, Range, Location, QuickPickItem, FileSystemError } from 'vscode';
-import { Service, InjectionSite, Registration, ProjectItem, PickItem } from './models';
+import {
+commands, workspace, window, ExtensionContext,
+Uri, Range, Position, WorkspaceEdit, FileSystemError
+} from 'vscode';
+import { Service, InjectionSite, Registration, PickItem } from './models';
 import { serviceProvider } from './serviceProvider';
 import { diNavigatorProvider } from './treeView';
 import {
@@ -8,11 +11,9 @@ import {
   COMMAND_SELECT_PROJECT, GLOBAL_STATE_KEY,
   MESSAGE_CLEARED_SELECTION, MESSAGE_NO_IMPL,
   MESSAGE_NO_PROJECTS, MESSAGE_REFRESHED,
-  PLACEHOLDER_SELECT_PROJECT,
   PROJECT_PATTERNS
 } from './const';
 
-const MESSAGE_SELECTED_PROJECT = (label: string) => `Selected project= ${label}`;
 
 async function findProjectFiles(context: ExtensionContext): Promise<Uri[]> {
   const CACHE_KEY = 'cachedProjects';
@@ -78,10 +79,9 @@ function getMessage(label: string, ...args: any[]): string {
 }
 
 export function registerCommands(context: ExtensionContext) {
-  // Select project command
+  // Scan all projects command
   /**
-   * Selects a project for DI analysis.
-   * Scans workspace for project files and allows user to pick one.
+   * Scans all projects in workspace for DI analysis.
    */
   const selectProjectDisposable = commands.registerCommand(COMMAND_SELECT_PROJECT, async () => {
     const allProjects = await findProjectFiles(context);
@@ -90,28 +90,18 @@ export function registerCommands(context: ExtensionContext) {
       return;
     }
 
-    const projectItems: ProjectItem[] = allProjects.map(uri => ({
-      label: workspace.asRelativePath(uri),
-      uri
-    } as ProjectItem));
-
-    const selected = await window.showQuickPick<ProjectItem>(projectItems, {
-      placeHolder: PLACEHOLDER_SELECT_PROJECT,
-      canPickMany: false,
-      ignoreFocusOut: true
-    });
-    if (selected) {
-      await context.globalState.update(GLOBAL_STATE_KEY, Uri.file(selected.uri.fsPath).fsPath);
-      await serviceProvider.refresh();
-      await diNavigatorProvider.refresh();
-      window.showInformationMessage(MESSAGE_SELECTED_PROJECT(selected.label));
-    }
-    console.log('Select Project command executed.');
+    // Store all projects as array of paths
+    const projectPaths = allProjects.map(uri => uri.fsPath);
+    await context.globalState.update(GLOBAL_STATE_KEY, projectPaths);
+    await serviceProvider.refresh();
+    await diNavigatorProvider.refresh();
+    window.showInformationMessage(`Scanned ${allProjects.length} projects for DI registrations.`);
+    console.log('Scan All Projects command executed.');
   });
 
   // Clear selection command
   /**
-   * Clears the selected project and refreshes providers.
+   * Clears the selected projects and refreshes providers.
    */
   const clearSelectionDisposable = commands.registerCommand(COMMAND_CLEAR_SELECTION, async () => {
     console.log('DI Navigator: Clear Selection command executed.');
@@ -179,19 +169,106 @@ export function registerCommands(context: ExtensionContext) {
    * Navigates to the injection site in the editor.
    * @param site The injection site to navigate to.
    */
-  const gotoSiteDisposable = commands.registerCommand(COMMAND_GO_TO_SITE, async (site: InjectionSite) => {
-    if (!site) {
-      window.showInformationMessage('No injection site selected.');
-      console.log('Go to Injection Site command executed: No site provided.');
+  const gotoSiteDisposable = commands.registerCommand(COMMAND_GO_TO_SITE,
+    async (site: InjectionSite) => {
+      if (!site) {
+        window.showInformationMessage('No injection site selected.');
+        console.log('Go to Injection Site command executed: No site provided.');
+        return;
+      }
+
+      const success = await validateAndOpen(site.filePath, site.lineNumber);
+      if (success) {
+        console.log(`Go to Injection Site command executed: ${site.filePath}:${site.lineNumber}`);
+      } else {
+        console.log('Go to Injection Site command failed: Invalid file.');
+      }
+    });
+
+  // Resolve conflicts command
+  /**
+   * Shows conflicts and allows resolving them, e.g., removing duplicates.
+   */
+  const resolveConflictsDisposable = commands.registerCommand('di-navigator.resolveConflicts', async () => {
+    const groups = serviceProvider.getServiceGroups();
+    const conflicts = [];
+    for (const group of groups) {
+      for (const service of group.services) {
+        if (service.hasConflicts && service.conflicts) {
+          conflicts.push(...service.conflicts.map((c: { type: any; details: any; }) => ({
+            label: `${service.name}: ${c.type}`,
+            detail: c.details,
+            conflict: c,
+            service: service
+          })));
+        }
+      }
+    }
+
+    if (conflicts.length === 0) {
+      window.showInformationMessage('No conflicts found in DI registrations.');
       return;
     }
 
-    const success = await validateAndOpen(site.filePath, site.lineNumber);
-    if (success) {
-      console.log(`Go to Injection Site command executed: ${site.filePath}:${site.lineNumber}`);
-    } else {
-      console.log('Go to Injection Site command failed: Invalid file.');
+    const selected = await window.showQuickPick(conflicts, {
+      placeHolder: 'Select a conflict to resolve',
+      canPickMany: false
+    });
+
+    if (!selected) {
+      return;
     }
+
+    // Basic resolution: for duplicate implementations, offer to remove one
+    if (selected.conflict.type === 'DuplicateImplementation') {
+      const options = ['Navigate to first', 'Navigate to second', 'Remove duplicate (first)', 'Remove duplicate (second)', 'Cancel'];
+      const choice = await window.showQuickPick(options, { placeHolder: 'How to resolve?' });
+      if (choice && choice.includes('Remove') && selected.service.registrations.length > 1) {
+        // Find the duplicate regs for removal
+        const duplicateRegs = selected.service.registrations.filter((r: { implementationType: any; }) => r.implementationType === selected.conflict.details.split(' ')[0]);
+        if (duplicateRegs.length > 1) {
+          const toRemove = choice.includes('first') ? duplicateRegs[0] : duplicateRegs[1];
+          const edit = await window.showQuickPick(['Yes, remove', 'No'], { placeHolder: 'Confirm removal of registration at ' + toRemove.filePath + ':' + toRemove.lineNumber });
+          if (edit === 'Yes, remove') {
+  try {
+    const uri = Uri.file(toRemove.filePath);
+    const doc = await workspace.openTextDocument(uri);
+    const start = new Position(toRemove.lineNumber - 1, 0);
+    const range = new Range(start, start);
+    const edit = new WorkspaceEdit();
+    edit.insert(uri, start, '// ');
+    const success = await workspace.applyEdit(edit);
+    if (success) {
+      window.showInformationMessage(`Commented out duplicate registration at ${toRemove.filePath}:${toRemove.lineNumber}.`);
+    } else {
+      window.showWarningMessage(`Failed to apply edit to ${toRemove.filePath}.`);
+    }
+  } catch (error) {
+    console.error('Error editing file:', error);
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    window.showErrorMessage(`Failed to edit ${toRemove.filePath}: ${errMsg}`);
+  }
+  await serviceProvider.refresh();
+  await diNavigatorProvider.refresh();
+          }
+        }
+      } else if (choice === 'Navigate to first' || choice === 'Navigate to second') {
+        const reg = selected.service.registrations[0];
+        await validateAndOpen(reg.filePath, reg.lineNumber);
+      }
+    } else if (selected.conflict.type === 'MultipleImplementations') {
+      // Suggest choosing one impl
+      const regMaps = new Set(selected.service.registrations.map((r: { implementationType: any; }) => r.implementationType));
+      const impls: any[] = Array.from(regMaps);
+      const choice = await window.showQuickPick(impls, { placeHolder: 'Select preferred implementation, others will be marked for removal' });
+      if (choice) {
+        window.showInformationMessage(`Preferred impl: ${choice}. Manually remove others.`);
+      }
+    } else {
+      window.showInformationMessage(`Conflict "${selected.conflict.type}": ${selected.conflict.details}. Manual resolution recommended.`);
+    }
+
+    console.log('Resolve Conflicts command executed.');
   });
 
   // Invalidate cache on workspace changes
@@ -206,7 +283,8 @@ export function registerCommands(context: ExtensionContext) {
     clearSelectionDisposable,
     refreshDisposable,
     gotoImplDisposable,
-    gotoSiteDisposable
+    gotoSiteDisposable,
+    resolveConflictsDisposable
   );
 
   console.log('All DI Navigator commands registered successfully.');

@@ -10,6 +10,7 @@ export interface Registration {
     lifetime: Lifetime;
     serviceType: string; // e.g., 'IUserService'
     implementationType: string; // e.g., 'UserService'
+    name?: string; // For named services, e.g., key for named registration
     filePath: string;
     lineNumber: number;
     methodCall: string; // e.g., 'AddScoped'
@@ -27,6 +28,12 @@ export interface ServiceGroup {
     lifetime: Lifetime;
     services: Service[];
     color: string; // For TreeView theming, e.g., '#FF0000' for Singleton
+}
+
+export interface ProjectDI {
+    projectPath: string;
+    projectName: string;
+    serviceGroups: ServiceGroup[];
 }
 
 export interface InjectionSite {

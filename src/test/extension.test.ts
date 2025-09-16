@@ -124,147 +124,6 @@ suite('Extension Test Suite', () => {
 		vscode.workspace.getConfiguration = originalGetConfiguration;
 	});
 });
-suite('Parser Helpers Tests', () => {
-	const { isServicesChain, isValidDIMethod,
-		getLifetimeFromMethod,
-		extractTypeArguments, extractImplFromArguments,
-		extractConstructorInjectionSites } = require('../parser');
-	const { Lifetime } = require('../models');
-
-	test('isServicesChain identifies services identifier', () => {
-		const node = { type: 'identifier', text: 'services' };
-		assert.strictEqual(isServicesChain(node), true);
-	});
-
-	test('isServicesChain does not identify non-services', () => {
-		const node = { type: 'identifier', text: 'other' };
-		assert.strictEqual(isServicesChain(node), false);
-	});
-
-	test('isServicesChain identifies member access to services', () => {
-		const nameNode = { type: 'identifier', text: 'AddScoped' };
-		const functionNode = {
-			type: 'member_access_expression',
-			childForFieldName: (field: string) => field === 'name' ? nameNode : { type: 'identifier', text: 'services' }
-		};
-		assert.strictEqual(isServicesChain(functionNode), true);
-	});
-
-	test('isValidDIMethod detects AddSingleton', () => {
-		assert.strictEqual(isValidDIMethod('AddSingleton'), true);
-		assert.strictEqual(isValidDIMethod('AddScoped'), true);
-		assert.strictEqual(isValidDIMethod('AddTransient'), true);
-		assert.strictEqual(isValidDIMethod('AddSomethingElse'), false);
-	});
-
-	test('getLifetimeFromMethod returns correct lifetime', () => {
-		assert.strictEqual(getLifetimeFromMethod('AddSingleton'), Lifetime.Singleton);
-		assert.strictEqual(getLifetimeFromMethod('AddScoped'), Lifetime.Scoped);
-		assert.strictEqual(getLifetimeFromMethod('AddTransient'), Lifetime.Transient);
-	});
-
-	test('extractTypeArguments handles two args', () => {
-		const nameNode = {
-			childForFieldName: (field: string) => field === 'type_arguments' ? {
-				type: 'type_argument_list',
-				namedChildren: [{ text: 'IService' }, { text: 'Service' }]
-			} : null
-		};
-		const result = extractTypeArguments(nameNode);
-		assert.strictEqual(result.serviceType, 'IService');
-		assert.strictEqual(result.implType, 'Service');
-	});
-
-	test('extractTypeArguments handles single arg self-registration', () => {
-		const nameNode = {
-			childForFieldName: (field: string) => field === 'type_arguments' ? {
-				type: 'type_argument_list',
-				namedChildren: [{ text: 'Service' }]
-			} : null
-		};
-		const result = extractTypeArguments(nameNode);
-		assert.strictEqual(result.serviceType, 'Service');
-		assert.strictEqual(result.implType, 'Service');
-	});
-
-	test('extractTypeArguments handles no args', () => {
-		const nameNode = { childForFieldName: () => null };
-		const result = extractTypeArguments(nameNode);
-		assert.strictEqual(result.serviceType, 'Unknown');
-		assert.strictEqual(result.implType, 'Unknown');
-	});
-
-	test('extractImplFromArguments handles new_expression', () => {
-		const argList = {
-			namedChildren: [{
-				type: 'argument',
-				namedChildren: [{
-					type: 'new_expression',
-					childForFieldName: (field: string) =>
-						field === 'constructor'
-							? { type: 'simple_type', text: 'MyService' }
-							: null
-				}]
-			}]
-		};
-		const result = extractImplFromArguments(argList, 'IService');
-		assert.strictEqual(result, 'MyService');
-	});
-
-	test('extractImplFromArguments handles lambda factory', () => {
-		const argList = {
-			namedChildren: [{
-				type: 'argument',
-				namedChildren: [{ type: 'lambda_expression' }]
-			}]
-		};
-		const result = extractImplFromArguments(argList, 'IService');
-		assert.strictEqual(result, 'Factory');
-	});
-
-	test('extractImplFromArguments handles identifier reference', () => {
-		const argList = {
-			namedChildren: [{
-				type: 'argument',
-				namedChildren: [{ type: 'identifier', text: 'someService' }]
-			}]
-		};
-		const result = extractImplFromArguments(argList, 'IService');
-		assert.strictEqual(result, 'someService');
-	});
-
-	test('extractImplFromArguments falls back to serviceType', () => {
-		const argList = { namedChildren: [] };
-		const result = extractImplFromArguments(argList, 'IService');
-		assert.strictEqual(result, 'IService');
-	});
-
-	test('extractConstructorInjectionSites extracts params', () => {
-		const constructorNode = {
-			childForFieldName: (field: string) => field === 'parameters' ? {
-				type: 'parameter_list',
-				namedChildren: [{
-					type: 'parameter',
-					childForFieldName: (f: string) => f === 'type' ? { type: 'simple_type', text: 'IService' } : null,
-					startPosition: { row: 10 }
-				}]
-			} : null,
-			text: 'ctor'
-		};
-		const sites = extractConstructorInjectionSites(constructorNode, 'MyClass', '/path/to/file.cs');
-		assert.strictEqual(sites.length, 1);
-		assert.strictEqual(sites[0].serviceType, 'IService');
-		assert.strictEqual(sites[0].lineNumber, 11);
-		assert.strictEqual(sites[0].className, 'MyClass');
-		assert.strictEqual(sites[0].memberName, 'ctor');
-	});
-
-	test('extractConstructorInjectionSites handles no params', () => {
-		const constructorNode = { childForFieldName: () => null, text: 'ctor' };
-		const sites = extractConstructorInjectionSites(constructorNode, 'MyClass', '/path/to/file.cs');
-		assert.strictEqual(sites.length, 0);
-	});
-});
 
 suite('Activation and View Visibility Tests', () => {
 	const { activate } = require('../extension');
@@ -480,5 +339,158 @@ suite('Commands Tests', () => {
 
 		// Error logged, message shown
 		assert(true); // No crash
+	});
+});
+
+suite('Roslyn Integration Tests', () => {
+	const { extractRegistrations, extractInjectionSites } = require('../parser');
+	const { Lifetime } = require('../models');
+	const { execSync } = require('child_process');
+	const { existsSync } = require('fs');
+	const path = require('path');
+
+	test('extractRegistrations uses Roslyn tool and parses output', () => {
+		const sandbox = sinon.createSandbox();
+		const mockExists = sandbox.stub(require('fs'), 'existsSync').returns(true);
+		const mockExec = sandbox.stub(execSync, 'execSync').returns(
+			Buffer.from(JSON.stringify({
+				Registrations: [
+					{
+						Lifetime: 'Scoped',
+						ServiceType: 'IService',
+						ImplementationType: 'ServiceImpl',
+						FilePath: '/test/file.cs',
+						LineNumber: 10,
+						MethodCall: 'AddScoped'
+					}
+				],
+				InjectionSites: []
+			}))
+		);
+
+		const mockToolPath = './tools/roslyn-di-analyzer/bin/Debug/net8.0/roslyn-di-analyzer.dll';
+		const command = `dotnet "${mockToolPath}" --file "/test/file.cs"`;
+
+		const result = extractRegistrations('/test/file.cs');
+
+		sinon.assert.calledOnce(mockExists);
+		sinon.assert.calledWith(mockExec, command, { encoding: 'utf8' });
+		assert.strictEqual(result.length, 1);
+		assert.strictEqual(result[0].lifetime, Lifetime.Scoped);
+		assert.strictEqual(result[0].serviceType, 'IService');
+		assert.strictEqual(result[0].implementationType, 'ServiceImpl');
+		assert.strictEqual(result[0].filePath, '/test/file.cs');
+		assert.strictEqual(result[0].lineNumber, 10);
+		assert.strictEqual(result[0].methodCall, 'AddScoped');
+
+		sandbox.restore();
+	});
+
+	test('extractInjectionSites uses Roslyn tool and parses output', () => {
+		const sandbox = sinon.createSandbox();
+		const mockExists = sandbox.stub(require('fs'), 'existsSync').returns(true);
+		const mockExec = sandbox.stub(execSync, 'execSync').returns(
+			Buffer.from(JSON.stringify({
+				Registrations: [],
+				InjectionSites: [
+					{
+						FilePath: '/test/file.cs',
+						LineNumber: 15,
+						ClassName: 'MyClass',
+						MemberName: 'ctor',
+						Type: 'constructor',
+						ServiceType: 'IService'
+					},
+					{
+						FilePath: '/test/file.cs',
+						LineNumber: 20,
+						ClassName: 'MyClass',
+						MemberName: 'logger',
+						Type: 'field',
+						ServiceType: 'ILogger'
+					}
+				]
+			}))
+		);
+
+		const mockToolPath = './tools/roslyn-di-analyzer/bin/Debug/net8.0/roslyn-di-analyzer.dll';
+		const command = `dotnet "${mockToolPath}" --file "/test/file.cs"`;
+
+		const result = extractInjectionSites('/test/file.cs');
+
+		sinon.assert.calledOnce(mockExists);
+		sinon.assert.calledWith(mockExec, command, { encoding: 'utf8' });
+		assert.strictEqual(result.length, 2);
+		assert.strictEqual(result[0].filePath, '/test/file.cs');
+		assert.strictEqual(result[0].lineNumber, 15);
+		assert.strictEqual(result[0].className, 'MyClass');
+		assert.strictEqual(result[0].memberName, 'ctor');
+		assert.strictEqual(result[0].type, 'constructor');
+		assert.strictEqual(result[0].serviceType, 'IService');
+
+		assert.strictEqual(result[1].filePath, '/test/file.cs');
+		assert.strictEqual(result[1].lineNumber, 20);
+		assert.strictEqual(result[1].className, 'MyClass');
+		assert.strictEqual(result[1].memberName, 'logger');
+		assert.strictEqual(result[1].type, 'field');
+		assert.strictEqual(result[1].serviceType, 'ILogger');
+
+		sandbox.restore();
+	});
+
+	test('extractRegistrations falls back to regex when tool missing', () => {
+		const sandbox = sinon.createSandbox();
+		sandbox.stub(require('fs'), 'existsSync').returns(false);
+		const mockSource = `
+			public void ConfigureServices(IServiceCollection services) {
+				services.AddScoped<IService, ServiceImpl>();
+				services.AddTransient<IOtherService>();
+			}
+		`;
+
+		const result = extractRegistrations('/test/file.cs', mockSource);
+
+		assert.strictEqual(result.length, 2);
+		assert.strictEqual(result[0].serviceType, 'IService');
+		assert.strictEqual(result[0].implementationType, 'ServiceImpl');
+		assert.strictEqual(result[0].lifetime, Lifetime.Scoped);
+		assert.strictEqual(result[1].serviceType, 'IOtherService');
+		assert.strictEqual(result[1].implementationType, 'IOtherService');
+		assert.strictEqual(result[1].lifetime, Lifetime.Transient);
+
+		sandbox.restore();
+	});
+
+	test('extractInjectionSites falls back to regex when tool missing', () => {
+		const sandbox = sinon.createSandbox();
+		sandbox.stub(require('fs'), 'existsSync').returns(false);
+		const mockSource = `
+			public class MyClass {
+				public MyClass(IService service) { }
+				private readonly ILogger logger;
+			}
+		`;
+
+		const result = extractInjectionSites('/test/file.cs', mockSource);
+
+		assert.strictEqual(result.length, 2); // ctor param and field
+		// Note: regex is approximate, but verifies fallback works without crash
+
+		sandbox.restore();
+	});
+
+	test('extractRegistrations handles Roslyn tool error, falls back to regex', () => {
+		const sandbox = sinon.createSandbox();
+		sandbox.stub(require('fs'), 'existsSync').returns(true);
+		sandbox.stub(execSync, 'execSync').throws(new Error('Tool error'));
+		const mockSource = `services.AddScoped<IService, ServiceImpl>();`;
+
+		const result = extractRegistrations('/test/file.cs', mockSource);
+
+		// Should fallback to regex
+		assert.strictEqual(result.length, 1);
+		assert.strictEqual(result[0].serviceType, 'IService');
+
+		sandbox.restore();
 	});
 });
