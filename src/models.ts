@@ -28,6 +28,7 @@ export interface ServiceGroup {
     lifetime: Lifetime;
     services: Service[];
     color: string; // For TreeView theming, e.g., '#FF0000' for Singleton
+    count?: number;
 }
 
 export interface ProjectDI {

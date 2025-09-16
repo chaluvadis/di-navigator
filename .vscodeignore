@@ -16,3 +16,8 @@ vsc-extension-quickstart.md
 **/obj/
 **/testdata/
 tools/**
+.github/**
+.vscode-test-web/**
+out/**
+.vscode-test/**
+node_modules/**

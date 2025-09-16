@@ -1,6 +1,6 @@
 import {
-commands, workspace, window, ExtensionContext,
-Uri, Range, Position, WorkspaceEdit, FileSystemError
+  commands, workspace, window, ExtensionContext,
+  Uri, Range, Position, WorkspaceEdit, FileSystemError
 } from 'vscode';
 import { Service, InjectionSite, Registration, PickItem } from './models';
 import { serviceProvider } from './serviceProvider';
@@ -19,7 +19,7 @@ async function findProjectFiles(context: ExtensionContext): Promise<Uri[]> {
   const CACHE_KEY = 'cachedProjects';
   const TTL = 5 * 60 * 1000; // 5 minutes
 
-  let cached = context.workspaceState.get<{ uris: Uri[]; timestamp: number }>(CACHE_KEY);
+  let cached = context.workspaceState.get<{ uris: Uri[]; timestamp: number; }>(CACHE_KEY);
   if (cached && Date.now() - cached.timestamp < TTL) {
     return cached.uris;
   }
@@ -120,6 +120,35 @@ export function registerCommands(context: ExtensionContext) {
     await serviceProvider.refresh();
     await diNavigatorProvider.refresh();
     window.showInformationMessage(MESSAGE_REFRESHED);
+  });
+
+  // Search services command
+  /**
+   * Searches and navigates to a DI service.
+   */
+  const searchServicesDisposable = commands.registerCommand('di-navigator.searchServices', async () => {
+    const services = serviceProvider.getAllServices();
+    if (!services.length) {
+      window.showInformationMessage('No DI services found.');
+      return;
+    }
+    const selected = await window.showQuickPick(services.map(s => ({
+      label: s.name,
+      detail: `${s.registrations.length} registrations`,
+      service: s
+    } as any)), {
+      placeHolder: 'Select a service to navigate to'
+    });
+    if (!selected) {
+      return;
+    }
+    const reg = selected.service.registrations[0];
+    if (reg) {
+      const success = await validateAndOpen(reg.filePath, reg.lineNumber);
+      if (success) {
+        console.log(`Navigated to service ${selected.service.name} at ${reg.filePath}:${reg.lineNumber}`);
+      }
+    }
   });
 
   // Go to implementation
@@ -230,26 +259,26 @@ export function registerCommands(context: ExtensionContext) {
           const toRemove = choice.includes('first') ? duplicateRegs[0] : duplicateRegs[1];
           const edit = await window.showQuickPick(['Yes, remove', 'No'], { placeHolder: 'Confirm removal of registration at ' + toRemove.filePath + ':' + toRemove.lineNumber });
           if (edit === 'Yes, remove') {
-  try {
-    const uri = Uri.file(toRemove.filePath);
-    const doc = await workspace.openTextDocument(uri);
-    const start = new Position(toRemove.lineNumber - 1, 0);
-    const range = new Range(start, start);
-    const edit = new WorkspaceEdit();
-    edit.insert(uri, start, '// ');
-    const success = await workspace.applyEdit(edit);
-    if (success) {
-      window.showInformationMessage(`Commented out duplicate registration at ${toRemove.filePath}:${toRemove.lineNumber}.`);
-    } else {
-      window.showWarningMessage(`Failed to apply edit to ${toRemove.filePath}.`);
-    }
-  } catch (error) {
-    console.error('Error editing file:', error);
-    const errMsg = error instanceof Error ? error.message : 'Unknown error';
-    window.showErrorMessage(`Failed to edit ${toRemove.filePath}: ${errMsg}`);
-  }
-  await serviceProvider.refresh();
-  await diNavigatorProvider.refresh();
+            try {
+              const uri = Uri.file(toRemove.filePath);
+              const doc = await workspace.openTextDocument(uri);
+              const start = new Position(toRemove.lineNumber - 1, 0);
+              const range = new Range(start, start);
+              const edit = new WorkspaceEdit();
+              edit.insert(uri, start, '// ');
+              const success = await workspace.applyEdit(edit);
+              if (success) {
+                window.showInformationMessage(`Commented out duplicate registration at ${toRemove.filePath}:${toRemove.lineNumber}.`);
+              } else {
+                window.showWarningMessage(`Failed to apply edit to ${toRemove.filePath}.`);
+              }
+            } catch (error) {
+              console.error('Error editing file:', error);
+              const errMsg = error instanceof Error ? error.message : 'Unknown error';
+              window.showErrorMessage(`Failed to edit ${toRemove.filePath}: ${errMsg}`);
+            }
+            await serviceProvider.refresh();
+            await diNavigatorProvider.refresh();
           }
         }
       } else if (choice === 'Navigate to first' || choice === 'Navigate to second') {
@@ -282,6 +311,7 @@ export function registerCommands(context: ExtensionContext) {
     selectProjectDisposable,
     clearSelectionDisposable,
     refreshDisposable,
+    searchServicesDisposable,
     gotoImplDisposable,
     gotoSiteDisposable,
     resolveConflictsDisposable

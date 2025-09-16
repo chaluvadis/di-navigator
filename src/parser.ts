@@ -24,9 +24,9 @@ export const getLifetimeFromMethod = (methodName: string): Lifetime => {
   }
 };
 
-export const parseCsharp = (sourceCode: string): null => {
-  // No AST return, use Roslyn tool via CLI
-  console.log(`source code : ${sourceCode}`);
+export const parseCsharp = (_sourceCode: string): null => {
+  // Placeholder: parsing is performed by `extractRegistrations`/`extractInjectionSites`.
+  // Kept for API compatibility; intentionally returns null.
   return null;
 };
 
@@ -155,4 +155,104 @@ export const extractInjectionSites = (filePath: string, sourceCode?: string): In
   }
 
   return injectionSites;
+};
+
+
+
+export interface TypeArgs {
+  serviceType: string;
+  implType: string;
+}
+
+
+
+export const isServicesChain = (node: any): boolean => {
+  if (node?.type === 'identifier') {
+    return node.text === 'services';
+  }
+  if (node?.type === 'member_access_expression') {
+    const nameChild = node.childForFieldName('name');
+    if (nameChild?.type === 'identifier' && nameChild.text.startsWith('Add')) {
+      const baseChild = node.childForFieldName('base') || node.childForFieldName('operand') || node.childForFieldName('expression');
+      if (baseChild && isServicesChain(baseChild)) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
+
+
+export const extractTypeArguments = (nameNode: any): TypeArgs => {
+  const typeArgsNode = nameNode.childForFieldName('type_arguments');
+  if (!typeArgsNode || typeArgsNode.type !== 'type_argument_list') {
+    return { serviceType: 'Unknown', implType: 'Unknown' };
+  }
+  const children = typeArgsNode.namedChildren || [];
+  if (children.length === 0) {
+    return { serviceType: 'Unknown', implType: 'Unknown' };
+  }
+  if (children.length === 1) {
+    return { serviceType: children[0].text, implType: children[0].text };
+  }
+  return { serviceType: children[0].text, implType: children[1].text };
+};
+
+
+
+export const extractImplFromArguments = (argList: any, serviceType: string): string => {
+  const args = argList.namedChildren || [];
+  if (args.length === 0) {
+    return serviceType;
+  }
+  const firstArg = args[0];
+  if (!firstArg || firstArg.type !== 'argument') {
+    return serviceType;
+  }
+  const argContent = firstArg.namedChildren?.[0];
+  if (!argContent) {
+    return serviceType;
+  }
+  if (argContent.type === 'new_expression') {
+    const ctor = argContent.childForFieldName('constructor');
+    if (ctor?.type === 'simple_type') {
+      return ctor.text;
+    }
+    return serviceType;
+  } else if (argContent.type === 'lambda_expression') {
+    return 'Factory';
+  } else if (argContent.type === 'identifier') {
+    return argContent.text;
+  }
+  return serviceType;
+};
+
+
+
+export const extractConstructorInjectionSites = (constructorNode: any, className: string, filePath: string): InjectionSite[] => {
+  const sites: InjectionSite[] = [];
+  const paramsNode = constructorNode.childForFieldName('parameters');
+  if (!paramsNode || paramsNode.type !== 'parameter_list') {
+    return sites;
+  }
+  const params = paramsNode.namedChildren || [];
+  for (const param of params) {
+    if (param.type === 'parameter') {
+      const typeNode = param.childForFieldName('type');
+      const paramStart = param.startPosition;
+      const lineNumber = paramStart ? paramStart.row + 1 : 0;
+      if (typeNode?.type === 'simple_type' && lineNumber > 0) {
+        sites.push({
+          filePath,
+          lineNumber,
+          className,
+          memberName: constructorNode.text || 'ctor',
+          type: 'constructor',
+          serviceType: typeNode.text
+        });
+      }
+    }
+  }
+  return sites;
 };

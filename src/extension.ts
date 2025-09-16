@@ -1,4 +1,4 @@
-import { ExtensionContext, workspace, window, commands } from 'vscode';
+import { ExtensionContext, workspace, window, commands, ProgressLocation } from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
 import { registerCommands } from './commands';
@@ -11,7 +11,7 @@ import {
 function getExcludeGlob(fallbackPatterns: readonly string[]): string {
   const config = workspace.getConfiguration(CONFIG_SECTION);
   const patterns = config.get<string[]>(CONFIG_EXCLUDE_FOLDERS) || Array.from(fallbackPatterns);
-  return patterns.join(', ');
+  return patterns.length > 1 ? `{${patterns.join(',')}}` : patterns[0];
 }
 export async function detectNetWorkspace(): Promise<boolean> {
   try {
@@ -43,8 +43,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
     await commands.executeCommand('setContext', VALID_WORKSPACE_CONTEXT, isNet);
     if (isNet) {
       console.log('.NET workspace detected. Refreshing DI services.');
-      await serviceProvider.collectRegistrations();
-      diNavigatorProvider.refresh();
+      // Run a background scan with a progress notification so activation is not blocked.
+      window.withProgress({
+        location: ProgressLocation.Notification,
+        title: 'DI Navigator: Scanning C# files',
+        cancellable: false
+      }, async (p) => {
+        await serviceProvider.collectRegistrations(p);
+        diNavigatorProvider.refresh();
+      }).then(() => {
+        // completed
+      }, (err: unknown) => {
+        console.error('Error during DI scan:', err);
+        diNavigatorProvider.refresh();
+      });
     } else {
       console.log('Non-.NET workspace. Clearing DI analysis.');
       serviceProvider.clearState();
@@ -52,8 +64,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }
   };
 
-  // Initial detection and setup
-  await updateWorkspaceContext();
+  // Initial detection and setup (do not block activation; run scan in background)
+  // Kick off detection/scan but don't await here so the extension activates quickly.
+  updateWorkspaceContext().catch(err => console.error('Error during initial workspace detection:', err));
 
   // Watch for relevant file changes to update context and refresh
   const excludeGlob = getExcludeGlob(DEFAULT_EXCLUDE_FOLDERS);

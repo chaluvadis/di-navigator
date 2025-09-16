@@ -6,7 +6,6 @@ import {
   Colors, InjectionSite
 } from './models';
 import {
-  parseCsharp,
   extractRegistrations,
   extractInjectionSites
 } from './parser';
@@ -18,8 +17,10 @@ import {
 
 export class ServiceProvider {
   private projectDI: ProjectDI[] = [];
+  private allServices: Service[] = [];
   private cache = new Map<string, ProjectDI[]>();
   private context: ExtensionContext | undefined;
+  private dirty = false;
 
   setContext(context: ExtensionContext): void {
     this.context = context;
@@ -36,10 +37,12 @@ export class ServiceProvider {
       this.context.globalState.update(GLOBAL_STATE_KEY, undefined);
     }
     this.projectDI = [];
+    this.allServices = [];
+    this.dirty = false;
     this.cache.clear();
   }
 
-  private async parseFile(filePath: string): Promise<{ registrations: Registration[]; injectionSites: InjectionSite[] }> {
+  private async parseFile(filePath: string): Promise<{ registrations: Registration[]; injectionSites: InjectionSite[]; }> {
     const document = await workspace.openTextDocument(filePath);
     const sourceCode = document.getText();
     const regs = extractRegistrations(filePath, sourceCode);
@@ -47,7 +50,7 @@ export class ServiceProvider {
     return { registrations: regs, injectionSites: sites };
   }
 
-  async collectRegistrations(): Promise<void> {
+  async collectRegistrations(progress?: { report: (info: { increment?: number; message?: string; }) => void; }): Promise<void> {
     if (!this.context) {
       console.error('Extension context not set. Cannot access global state.');
       return;
@@ -85,6 +88,7 @@ export class ServiceProvider {
         console.error(`Error finding files in ${projectDir}:`, error);
         continue;
       }
+      progress?.report({ increment: 0, message: `Scanning ${csFiles.length} C# files in project ${projectName}` });
       console.log(`Scanning ${csFiles.length} C# files in project ${projectName}`);
       const projectRegs: Registration[] = [];
       const projectInjectionSites: InjectionSite[] = [];
@@ -98,6 +102,7 @@ export class ServiceProvider {
           const parseResult = await this.parseFile(file.fsPath);
           const fileRegs = parseResult.registrations;
           const fileSites = parseResult.injectionSites;
+          progress?.report({ message: `Parsed ${path.basename(file.fsPath)}: ${fileRegs.length} registrations, ${fileSites.length} sites` });
           console.log(`Parsed ${file.fsPath} with JS parser: ${fileRegs.length} registrations, ${fileSites.length} sites`);
           projectTotalRegs += fileRegs.length;
           totalRegs += fileRegs.length;
@@ -218,11 +223,20 @@ export class ServiceProvider {
     }
 
     this.projectDI = projectDI;
+    progress?.report({ increment: 100, message: `Scan complete: ${projectDI.length} projects, ${totalRegs} registrations` });
     console.log(`Total projects scanned: ${projectDI.length}, Total registrations: ${totalRegs}, Total injection sites: ${totalSites}`);
     if (projectDI.length === 0) {
       console.warn('No .NET projects found in workspace.');
     }
     this.cache.set('default', this.projectDI);
+
+    // Populate allServices
+    this.allServices = [];
+    for (const project of projectDI) {
+      for (const group of project.serviceGroups) {
+        this.allServices.push(...group.services);
+      }
+    }
   }
 
   private getLifetimeColor(lifetime: Lifetime): string {
@@ -235,20 +249,95 @@ export class ServiceProvider {
   }
 
   getProjectDI(): ProjectDI[] {
-    return this.projectDI;
+  	return this.projectDI;
+  }
+ 
+  invalidateFile(filePath: string): void {
+  	this.dirty = true;
+  	this.cache.clear();
+  	this.allServices = [];
+  	console.log(`Invalidated cache due to change in ${filePath}`);
   }
 
   getServiceGroups(): ServiceGroup[] {
-    // Flat view for legacy support
-    const allGroups: ServiceGroup[] = [];
-    for (const project of this.projectDI) {
-      allGroups.push(...project.serviceGroups);
+    if (this.projectDI.length === 0) {
+      // Test mode: lazy loading with counts
+      const groups: ServiceGroup[] = [];
+      for (const lifetime of LIFETIMES) {
+        const count = this.allServices.filter(s => s.registrations.some(r => r.lifetime === lifetime)).length;
+        if (count > 0) {
+          groups.push({
+            lifetime,
+            services: [],
+            color: this.getLifetimeColor(lifetime),
+            count
+          });
+        }
+      }
+      return groups;
+    } else {
+      // Normal mode
+      const allGroups: ServiceGroup[] = [];
+      for (const project of this.projectDI) {
+        for (const group of project.serviceGroups) {
+          allGroups.push({
+            ...group,
+            count: group.services.length
+          });
+        }
+      }
+      return allGroups;
     }
-    return allGroups;
+  }
+
+  getServicesForLifetime(lifetime: Lifetime): Service[] {
+    return this.allServices.filter(s => s.registrations.some(r => r.lifetime === lifetime));
+  }
+
+  buildGraphAndConflicts(servicesByName: Map<string, Service>): void {
+    for (const service of servicesByName.values()) {
+      if (service.registrations.length > 0 && service.injectionSites.length === 0) {
+        service.hasConflicts = true;
+        if (!service.conflicts) {
+          service.conflicts = [];
+        }
+        service.conflicts.push({
+          type: 'Unused',
+          details: `Service ${service.name} has registrations but no injection sites.`
+        });
+      }
+    }
+  }
+
+  getAllServices(): Service[] {
+    return this.allServices;
   }
 
   async refresh(): Promise<void> {
+    if (!this.dirty && this.context) {
+      const cacheKey = 'diCache';
+      const cached = this.context.workspaceState.get<{ data: ProjectDI[]; timestamp: number; }>(cacheKey);
+      if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) { // 5 min TTL
+        this.projectDI = cached.data;
+        // Repopulate allServices
+        this.allServices = [];
+        for (const project of this.projectDI) {
+          for (const group of project.serviceGroups) {
+            this.allServices.push(...group.services);
+          }
+        }
+        return;
+      }
+    }
     await this.collectRegistrations();
+    if (this.context) {
+      const cacheKey = 'diCache';
+      this.context.workspaceState.update(cacheKey, {
+        data: this.projectDI,
+        timestamp: Date.now()
+      });
+    }
+    this.dirty = false;
   }
 }
 

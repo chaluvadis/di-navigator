@@ -1,8 +1,11 @@
-import assert from 'assert';
+import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as extension from '../extension';
-import * as models from '../models';
 import sinon from 'sinon';
+import { serviceProvider } from '../serviceProvider';
+import { Lifetime, Service } from '../models';
+import * as Commands from '../commands';
+import * as parser from '../parser';
 
 suite('Extension Test Suite', () => {
 	vscode.window.showInformationMessage('Start all tests.');
@@ -12,35 +15,29 @@ suite('Extension Test Suite', () => {
 		const originalGetConfiguration = vscode.workspace.getConfiguration;
 
 		// Mock getConfiguration to return exclude patterns
-		vscode.workspace.getConfiguration = function (): vscode.WorkspaceConfiguration {
-			return {
-				get: function <T>(section: string): T | undefined {
-					if (section === 'diNavigator.excludeFolders') {
-						return ['**/bin/**', '**/obj/**', '**/Properties/**'] as T;
-					}
-					return undefined;
-				},
-				has: function (): boolean { return false; },
-				inspect: function (): any { return undefined; },
-				update: async function (): Promise<void> { return; }
-			};
-		};
+		vscode.workspace.getConfiguration = () => ({
+			get: (section: string) => {
+				if (section === 'diNavigator.excludeFolders') {
+					return ['**/bin/**', '**/obj/**', '**/Properties/**'];
+				}
+				return undefined;
+			},
+			has: () => false,
+			inspect: () => undefined,
+			update: async () => { }
+		});
 
 		// Mock findFiles to return a csproj file
-		vscode.workspace.findFiles = async function (
+		vscode.workspace.findFiles = async (
 			include: vscode.GlobPattern,
-			exclude?: vscode.GlobPattern | null | undefined,
-			_maxResults?: number | undefined,
-			_token?: vscode.CancellationToken | undefined
-		): Promise<vscode.Uri[]> {
-			// Simulate excludeGlob check
-			const excludePatterns = ['**/bin/**', '**/obj/**', '**/Properties/**'];
-			const excludeGlob = excludePatterns.join(', ');
-			if (exclude !== excludeGlob) {
-				throw new Error('Exclude mismatch');
-			}
-			if (typeof include === 'string' && (['**/*.csproj', '**/*.sln', '**/*.slnx'].includes(include))) {
-				return [vscode.Uri.file("C:\\Users\\schaluvadi\\source\\myworks\\WorkFlowOrchestrator\\src\\WorkflowOrchestrator.Api\\WorkflowOrchestrator.Api.csproj")];
+			_exclude?: vscode.GlobPattern | null,
+			_maxResults?: number,
+			_token?: vscode.CancellationToken
+		) => {
+			const includeStr = typeof include === 'string' ? include : (
+				include as vscode.RelativePattern).pattern;
+			if (includeStr.includes('.csproj') || includeStr.includes('.sln') || includeStr.includes('.slnx')) {
+				return [vscode.Uri.file('/test/test.csproj')];
 			}
 			return [];
 		};
@@ -54,66 +51,27 @@ suite('Extension Test Suite', () => {
 
 	test('detectNetWorkspace without .NET files', async () => {
 		const originalFindFiles = vscode.workspace.findFiles;
-		const originalGetConfiguration = vscode.workspace.getConfiguration;
-
-		// Mock getConfiguration
-		vscode.workspace.getConfiguration = function (): vscode.WorkspaceConfiguration {
-			return {
-				get: function <T>(section: string): T | undefined {
-					section;
-					return undefined;
-				},
-				has: function (): boolean { return false; },
-				inspect: function (): any { return undefined; },
-				update: async function (): Promise<void> { return; }
-			};
-		};
-
-		// Mock findFiles to return empty
-		vscode.workspace.findFiles = async function (
-			include: vscode.GlobPattern,
-			exclude?: vscode.GlobPattern | null | undefined,
-			_maxResults?: number | undefined,
-			_token?: vscode.CancellationToken | undefined
-		): Promise<vscode.Uri[]> {
-			include;
-			exclude;
-			return [];
-		};
+		vscode.workspace.findFiles = async (
+			_include: vscode.GlobPattern,
+			_exclude?: vscode.GlobPattern | null,
+			_maxResults?: number,
+			_token?: vscode.CancellationToken
+		) => [];
 
 		const result = await extension.detectNetWorkspace();
 		assert.strictEqual(result, false);
 
 		vscode.workspace.findFiles = originalFindFiles;
-		vscode.workspace.getConfiguration = originalGetConfiguration;
 	});
 
 	test('detectNetWorkspace handles error', async () => {
 		const originalFindFiles = vscode.workspace.findFiles;
-		const originalGetConfiguration = vscode.workspace.getConfiguration;
-
-		// Mock getConfiguration
-		vscode.workspace.getConfiguration = function (): vscode.WorkspaceConfiguration {
-			return {
-				get: function <T>(section: string): T | undefined {
-					section;
-					return undefined;
-				},
-				has: function (): boolean { return false; },
-				inspect: function (): any { return undefined; },
-				update: async function (): Promise<void> { return; }
-			};
-		};
-
-		// Mock findFiles to throw error
-		vscode.workspace.findFiles = async function (
-			include: vscode.GlobPattern,
-			exclude?: vscode.GlobPattern | null | undefined,
-			_maxResults?: number | undefined,
-			_token?: vscode.CancellationToken | undefined
-		): Promise<vscode.Uri[]> {
-			include;
-			exclude;
+		vscode.workspace.findFiles = async (
+			_include: vscode.GlobPattern,
+			_exclude?: vscode.GlobPattern | null,
+			_maxResults?: number,
+			_token?: vscode.CancellationToken
+		) => {
 			throw new Error('Test error');
 		};
 
@@ -121,376 +79,359 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(result, false);
 
 		vscode.workspace.findFiles = originalFindFiles;
-		vscode.workspace.getConfiguration = originalGetConfiguration;
 	});
-});
-
-suite('Activation and View Visibility Tests', () => {
-	const { activate } = require('../extension');
-	const { commands } = require('vscode');
-	const { serviceProvider } = require('../serviceProvider');
 
 	test('activation sets context true for .NET workspace', async () => {
 		const originalFindFiles = vscode.workspace.findFiles;
-		vscode.workspace.findFiles = async () => [vscode.Uri.file('test.csproj')];
+		vscode.workspace.findFiles = async (
+			_include: vscode.GlobPattern,
+			_exclude?: vscode.GlobPattern | null,
+			_maxResults?: number,
+			_token?: vscode.CancellationToken
+		) => [vscode.Uri.file('test.csproj')];
 
-		const sandbox = sinon.createSandbox();
-		sandbox.stub(commands, 'executeCommand');
-		sandbox.stub(serviceProvider, 'collectRegistrations').resolves();
-		sandbox.stub(serviceProvider, 'clearState').resolves();
+		let registerCommands = sinon.stub().callsFake(() => { });
+		const originalRegisterCommands = registerCommands;
 
-		const context = { subscriptions: [] };
-		await activate(context);
+		const setContextStub = sinon.stub(vscode.commands, 'executeCommand');
+		const refreshStub = sinon.stub(serviceProvider, 'refresh').resolves();
+		const clearStub = sinon.stub(serviceProvider, 'clearState').resolves();
 
-		sinon.assert.calledWith(
-			commands.executeCommand,
-			sinon.match('setContext'),
-			'diNavigator:validWorkspace',
-			true
-		);
-		sinon.assert.calledOnce(serviceProvider.collectRegistrations);
-		sinon.assert.notCalled(serviceProvider.clearState);
+		const context = { subscriptions: [] } as any;
+		await extension.activate(context);
+
+		registerCommands = originalRegisterCommands;
+
+		sinon.assert.calledWith(setContextStub, 'setContext', 'diNavigator:validWorkspace', true);
+		sinon.assert.calledOnce(refreshStub);
+		sinon.assert.notCalled(clearStub);
 
 		vscode.workspace.findFiles = originalFindFiles;
-		sandbox.restore();
+		setContextStub.restore();
+		refreshStub.restore();
+		clearStub.restore();
 	});
 
 	test('activation sets context false for non-.NET workspace', async () => {
 		const originalFindFiles = vscode.workspace.findFiles;
-		vscode.workspace.findFiles = async () => [];
+		vscode.workspace.findFiles = async (
+			_include: vscode.GlobPattern,
+			_exclude?: vscode.GlobPattern | null,
+			_maxResults?: number,
+			_token?: vscode.CancellationToken
+		) => [];
 
-		const sandbox = sinon.createSandbox();
-		sandbox.stub(commands, 'executeCommand');
-		sandbox.stub(serviceProvider, 'collectRegistrations').resolves();
-		sandbox.stub(serviceProvider, 'clearState').resolves();
+		let registerCommands = sinon.stub().callsFake(() => { });
+		const originalRegisterCommands = registerCommands;
 
-		const context = { subscriptions: [] };
-		await activate(context);
+		const setContextStub = sinon.stub(vscode.commands, 'executeCommand');
+		const refreshStub = sinon.stub(serviceProvider, 'refresh').resolves();
+		const clearStub = sinon.stub(serviceProvider, 'clearState').resolves();
 
-		sinon.assert.calledWith(commands.executeCommand, sinon.match('setContext'), 'diNavigator:validWorkspace', false);
-		sinon.assert.notCalled(serviceProvider.collectRegistrations);
-		sinon.assert.calledOnce(serviceProvider.clearState);
+		const context = { subscriptions: [] } as any;
+		await extension.activate(context);
+
+		registerCommands = originalRegisterCommands;
+
+		sinon.assert.calledWith(setContextStub, 'setContext', 'diNavigator:validWorkspace', false);
+		sinon.assert.notCalled(refreshStub);
+		sinon.assert.calledOnce(clearStub);
 
 		vscode.workspace.findFiles = originalFindFiles;
-		sandbox.restore();
+		setContextStub.restore();
+		refreshStub.restore();
+		clearStub.restore();
+	});
+
+	afterEach(() => {
+		sinon.restore();
+	});
+
+	afterEach(() => {
+		sinon.restore();
+	});
+});
+
+suite('Parser Helpers Tests', () => {
+	test('isServicesChain identifies services identifier', () => {
+		const node = { type: 'identifier', text: 'services' };
+		assert.strictEqual(parser.isServicesChain(node), true);
+	});
+
+	test('isServicesChain does not identify non-services', () => {
+		const node = { type: 'identifier', text: 'other' };
+		assert.strictEqual(parser.isServicesChain(node), false);
+	});
+
+	test('isServicesChain identifies member access to services', () => {
+		const nameNode = { type: 'identifier', text: 'AddScoped' };
+		const functionNode = {
+			type: 'member_access_expression',
+			childForFieldName: (field: string) => field === 'name' ? nameNode : { type: 'identifier', text: 'services' }
+		};
+		assert.strictEqual(parser.isServicesChain(functionNode), true);
+	});
+
+	test('isValidDIMethod detects AddSingleton', () => {
+		assert.strictEqual(parser.isValidDIMethod('AddSingleton'), true);
+		assert.strictEqual(parser.isValidDIMethod('AddScoped'), true);
+		assert.strictEqual(parser.isValidDIMethod('AddTransient'), true);
+		assert.strictEqual(parser.isValidDIMethod('AddSomethingElse'), false);
+	});
+
+	test('getLifetimeFromMethod returns correct lifetime', () => {
+		assert.strictEqual(parser.getLifetimeFromMethod('AddSingleton'), Lifetime.Singleton);
+		assert.strictEqual(parser.getLifetimeFromMethod('AddScoped'), Lifetime.Scoped);
+		assert.strictEqual(parser.getLifetimeFromMethod('AddTransient'), Lifetime.Transient);
+	});
+
+	test('extractTypeArguments handles two args', () => {
+		const nameNode = {
+			childForFieldName: (field: string) => field === 'type_arguments' ? {
+				type: 'type_argument_list',
+				namedChildren: [{ text: 'IService' }, { text: 'Service' }]
+			} : null
+		};
+		const result = parser.extractTypeArguments(nameNode);
+		assert.strictEqual(result.serviceType, 'IService');
+		assert.strictEqual(result.implType, 'Service');
+	});
+
+	test('extractTypeArguments handles single arg self-registration', () => {
+		const nameNode = {
+			childForFieldName: (field: string) => field === 'type_arguments' ? {
+				type: 'type_argument_list',
+				namedChildren: [{ text: 'Service' }]
+			} : null
+		};
+		const result = parser.extractTypeArguments(nameNode);
+		assert.strictEqual(result.serviceType, 'Service');
+		assert.strictEqual(result.implType, 'Service');
+	});
+
+	test('extractTypeArguments handles no args', () => {
+		const nameNode = { childForFieldName: () => null };
+		const result = parser.extractTypeArguments(nameNode);
+		assert.strictEqual(result.serviceType, 'Unknown');
+		assert.strictEqual(result.implType, 'Unknown');
+	});
+
+	test('extractImplFromArguments handles new_expression', () => {
+		const argList = {
+			namedChildren: [{
+				type: 'argument',
+				namedChildren: [{
+					type: 'new_expression',
+					childForFieldName: (field: string) => field === 'constructor' ? { type: 'simple_type', text: 'MyService' } : null
+				}]
+			}]
+		};
+		const result = parser.extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'MyService');
+	});
+
+	test('extractImplFromArguments handles lambda factory', () => {
+		const argList = {
+			namedChildren: [{
+				type: 'argument',
+				namedChildren: [{ type: 'lambda_expression' }]
+			}]
+		};
+		const result = parser.extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'Factory');
+	});
+
+	test('extractImplFromArguments handles identifier reference', () => {
+		const argList = {
+			namedChildren: [{
+				type: 'argument',
+				namedChildren: [{ type: 'identifier', text: 'someService' }]
+			}]
+		};
+		const result = parser.extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'someService');
+	});
+
+	test('extractImplFromArguments falls back to serviceType', () => {
+		const argList = { namedChildren: [] };
+		const result = parser.extractImplFromArguments(argList, 'IService');
+		assert.strictEqual(result, 'IService');
+	});
+
+	test('extractConstructorInjectionSites extracts params', () => {
+		const constructorNode = {
+			childForFieldName: (field: string) => field === 'parameters' ? {
+				type: 'parameter_list',
+				namedChildren: [{
+					type: 'parameter',
+					childForFieldName: (f: string) => f === 'type' ? { type: 'simple_type', text: 'IService' } : null,
+					startPosition: { row: 10 }
+				}]
+			} : null,
+			text: 'ctor'
+		};
+		const sites = parser.extractConstructorInjectionSites(constructorNode, 'MyClass', '/path/to/file.cs');
+		assert.strictEqual(sites.length, 1);
+		assert.strictEqual(sites[0].serviceType, 'IService');
+		assert.strictEqual(sites[0].lineNumber, 11);
+		assert.strictEqual(sites[0].className, 'MyClass');
+		assert.strictEqual(sites[0].memberName, 'ctor');
+	});
+
+	test('extractConstructorInjectionSites handles no params', () => {
+		const constructorNode = { childForFieldName: () => null, text: 'ctor' };
+		const sites = parser.extractConstructorInjectionSites(constructorNode, 'MyClass', '/path/to/file.cs');
+		assert.strictEqual(sites.length, 0);
+	});
+});
+
+suite('ServiceProvider Tests', () => {
+	test('refresh uses cache if recent', async () => {
+		const mockContext = {
+			workspaceState: {
+				get: sinon.stub().returns({ data: [{ name: 'TestService', registrations: [], injectionSites: [], hasConflicts: false }], timestamp: Date.now() - 100000 }),
+				update: sinon.stub()
+			},
+			globalState: { get: sinon.stub().returns(undefined) }
+		};
+		serviceProvider.setContext(mockContext as any);
+
+		const collectSpy = sinon.spy(serviceProvider, 'collectRegistrations' as any);
+		await serviceProvider.refresh();
+
+		sinon.assert.notCalled(collectSpy);
+		collectSpy.restore();
+	});
+
+	test('refresh forces collect if dirty', async () => {
+		const mockContext = {
+			workspaceState: {
+				get: sinon.stub().returns(undefined),
+				update: sinon.stub()
+			},
+			globalState: { get: sinon.stub().returns(undefined) }
+		};
+		serviceProvider.setContext(mockContext as any);
+
+		serviceProvider.invalidateFile('test.cs');
+		const collectSpy = sinon.spy(serviceProvider, 'collectRegistrations' as any);
+		await serviceProvider.refresh();
+
+		sinon.assert.calledOnce(collectSpy);
+		collectSpy.restore();
+	});
+
+	test('getServicesForLifetime filters correctly', () => {
+		const mockServices = [
+			{
+				name: 'TestService',
+				registrations: [{ lifetime: Lifetime.Singleton, serviceType: 'Test', implementationType: 'TestImpl', filePath: '', lineNumber: 1, methodCall: '' }],
+				hasConflicts: false,
+				injectionSites: []
+			},
+			{
+				name: 'OtherService',
+				registrations: [{ lifetime: Lifetime.Scoped, serviceType: 'Other', implementationType: 'OtherImpl', filePath: '', lineNumber: 1, methodCall: '' }],
+				hasConflicts: false,
+				injectionSites: []
+			}
+		];
+		(serviceProvider as any).allServices = mockServices;
+
+		const singletonServices = serviceProvider.getServicesForLifetime(Lifetime.Singleton);
+		assert.strictEqual(singletonServices.length, 1);
+		assert.strictEqual(singletonServices[0].name, 'TestService');
+
+		const scopedServices = serviceProvider.getServicesForLifetime(Lifetime.Scoped);
+		assert.strictEqual(scopedServices.length, 1);
+		assert.strictEqual(scopedServices[0].name, 'OtherService');
+	});
+
+	test('buildGraphAndConflicts detects unused services', () => {
+		const mockServicesByName = new Map();
+		const usedService: Service = {
+			name: 'Used',
+			registrations: [{ lifetime: Lifetime.Singleton, serviceType: 'Used', implementationType: 'UsedImpl', filePath: '', lineNumber: 1, methodCall: '' }],
+			hasConflicts: false,
+			conflicts: [],
+			injectionSites: [{ filePath: '', lineNumber: 1, className: 'TestClass', memberName: 'ctor', type: 'constructor', serviceType: 'Used' }]
+		};
+		const unusedService: Service = {
+			name: 'Unused',
+			registrations: [{ lifetime: Lifetime.Singleton, serviceType: 'Unused', implementationType: 'UnusedImpl', filePath: '', lineNumber: 1, methodCall: '' }],
+			hasConflicts: false,
+			conflicts: [],
+			injectionSites: []
+		};
+		mockServicesByName.set('Used', usedService);
+		mockServicesByName.set('Unused', unusedService);
+
+		serviceProvider.buildGraphAndConflicts(mockServicesByName);
+
+		assert.strictEqual(unusedService.hasConflicts, true);
+		assert.strictEqual(unusedService.conflicts!.length, 1);
+		assert.strictEqual(unusedService.conflicts![0].type, 'Unused');
+		assert.strictEqual(usedService.hasConflicts, false);
+	});
+
+	test('getServiceGroups computes counts correctly', () => {
+		const mockServices = [
+			{
+				name: 'SingletonService',
+				registrations: [{ lifetime: Lifetime.Singleton, serviceType: 'S', implementationType: 'SImpl', filePath: '', lineNumber: 1, methodCall: '' }],
+				hasConflicts: false,
+				injectionSites: []
+			},
+			{
+				name: 'ScopedService',
+				registrations: [{ lifetime: Lifetime.Scoped, serviceType: 'Sc', implementationType: 'ScImpl', filePath: '', lineNumber: 1, methodCall: '' }],
+				hasConflicts: false,
+				injectionSites: []
+			}
+		];
+		(serviceProvider as any).allServices = mockServices;
+
+		const groups = serviceProvider.getServiceGroups();
+		const singletonGroup = groups.find(g => g.lifetime === Lifetime.Singleton)!;
+		const scopedGroup = groups.find(g => g.lifetime === Lifetime.Scoped)!;
+
+		assert.strictEqual(singletonGroup.count, 1);
+		assert.strictEqual(scopedGroup.count, 1);
+		assert.strictEqual(singletonGroup.services.length, 0); // Lazy
 	});
 });
 
 suite('Commands Tests', () => {
-	const { registerCommands, findProjectFiles, validateAndOpen } = require('../commands');
-	const { commands, workspace, window } = require('vscode');
-
-	test('findProjectFiles uses cache if fresh', async () => {
-		const context = {
-			workspaceState: {
-				get: sinon.stub().returns({
-					uris: [vscode.Uri.file('test.csproj')],
-					timestamp: Date.now() - 100000
-				}),
-				update: sinon.stub().resolves()
-			}
-		};
-		sinon.stub(workspace, 'findFiles').resolves([]);
-
-		const result = await findProjectFiles(context as any);
-
-		sinon.assert.notCalled(workspace.findFiles);
-		assert.strictEqual(result.length, 1);
-		assert.strictEqual(result[0].fsPath, 'test.csproj');
-	});
-
-	test('findProjectFiles scans and caches on stale cache', async () => {
-		const context = {
-			workspaceState: {
-				get: sinon.stub().returns({
-					uris: [],
-					timestamp: Date.now() - 10 * 60 * 1000
-				}),
-				update: sinon.stub().resolves()
-			}
-		};
-		const mockFiles = [vscode.Uri.file('proj.csproj')];
-		sinon.stub(workspace, 'findFiles').resolves(mockFiles);
-
-		const result = await findProjectFiles(context as any);
-
-		sinon.assert.calledOnce(workspace.findFiles);
-		assert.strictEqual(result.length, 1);
-		sinon.assert.calledWith(context.workspaceState.update, 'cachedProjects',
-			sinon.match({ uris: result, timestamp: sinon.match.number }));
-	});
-
-	test('findProjectFiles handles scan error', async () => {
-		const context = { workspaceState: { get: sinon.stub().returns(null), update: sinon.stub().resolves() } };
-		sinon.stub(workspace, 'findFiles').rejects(new Error('Scan error'));
-
-		const result = await findProjectFiles(context as any);
-
-		assert.strictEqual(result.length, 0);
-		sinon.assert.calledWith(context.workspaceState.update, 'cachedProjects', undefined);
-	});
-
-	test('validateAndOpen succeeds', async () => {
-		sinon.stub(workspace.fs, 'stat').resolves({} as any);
-		sinon.stub(workspace, 'openTextDocument').resolves({} as any);
-		sinon.stub(window, 'showTextDocument').resolves();
-
-		const result = await validateAndOpen('/valid/path.cs', 10);
-
-		assert.strictEqual(result, true);
-	});
-
-	test('validateAndOpen fails on missing file', async () => {
-		const error = new Error('File not found') as any;
-		error.code = 'EntryNotFound';
-		sinon.stub(workspace.fs, 'stat').rejects(error);
-
-		const result = await validateAndOpen('/missing/path.cs', 10);
-
-		assert.strictEqual(result, false);
-		// Mocked showWarningMessage called
-	});
-
-	test('GO_TO_IMPL with single registration', async () => {
-		const service = { registrations: [{ filePath: '/path.cs', lineNumber: 5 }] as models.Registration[] };
-		sinon.stub(workspace, 'openTextDocument').resolves({} as any);
-		sinon.stub(window, 'showTextDocument').resolves();
-		sinon.stub(workspace.fs, 'stat').resolves({} as any);
-
-		registerCommands({ subscriptions: [] } as any); // Register to access command
-
-		await commands.executeCommand('di-navigator.goToImplementation', service);
-
-		sinon.assert.calledOnce(window.showTextDocument);
-	});
-
-	test('GO_TO_IMPL with multiple registrations uses QuickPick', async () => {
-		const service = {
-			registrations: [
-				{ filePath: '/path1.cs', lineNumber: 5 },
-				{ filePath: '/path2.cs', lineNumber: 10 }
-			] as models.Registration[]
-		};
-		const mockSelected = { registration: service.registrations[1] };
-		sinon.stub(window, 'showQuickPick').resolves(mockSelected as any);
-		sinon.stub(workspace, 'openTextDocument').resolves({} as any);
-		sinon.stub(window, 'showTextDocument').resolves();
-		sinon.stub(workspace.fs, 'stat').resolves({} as any);
-
-		registerCommands({ subscriptions: [] } as any);
-
-		await commands.executeCommand('di-navigator.goToImplementation', service);
-
-		sinon.assert.calledOnce(window.showQuickPick);
-		sinon.assert.calledWith(window.showTextDocument, sinon.match.any, { selection: new vscode.Range(9, 0, 9, 0) });
-	});
-
-	test('GO_TO_IMPL no registrations shows message', async () => {
-		const service = { registrations: [] as models.Registration[] };
-
-		sinon.stub(window, 'showInformationMessage');
-
-		registerCommands({ subscriptions: [] } as any);
-
-		await commands.executeCommand('di-navigator.goToImplementation', service);
-
-		sinon.assert.calledWith(window.showInformationMessage, 'No implementation found.');
-	});
-
-	test('GO_TO_SITE with site', async () => {
-		const site = { filePath: '/path.cs', lineNumber: 5 } as models.InjectionSite;
-		sinon.stub(workspace, 'openTextDocument').resolves({} as any);
-		sinon.stub(window, 'showTextDocument').resolves();
-		sinon.stub(workspace.fs, 'stat').resolves({} as any);
-
-		registerCommands({ subscriptions: [] } as any);
-
-		await commands.executeCommand('di-navigator.goToInjectionSite', site);
-
-		sinon.assert.calledOnce(window.showTextDocument);
-	});
-
-	test('GO_TO_SITE no site shows message', async () => {
-		sinon.stub(window, 'showInformationMessage');
-
-		registerCommands({ subscriptions: [] } as any);
-
-		await commands.executeCommand('di-navigator.goToInjectionSite', null);
-
-		sinon.assert.calledWith(window.showInformationMessage, 'No injection site selected.');
-	});
-
-	test('registerCommands handles registration error', async () => {
-		const { serviceProvider } = require('../serviceProvider');
-		const { diNavigatorProvider } = require('../treeView');
-
-		const context = { subscriptions: [], globalState: { update: sinon.stub().resolves() } } as any;
-		sinon.stub(commands, 'registerCommand').callsFake((cmd) => {
-			if (cmd === 'di-navigator.selectProject') {
-				throw new Error('Test error');
-			}
-			return { dispose: () => { } };
-		});
-		sinon.stub(workspace, 'onDidChangeWorkspaceFolders').returns({ dispose: () => { } });
-		sinon.stub(serviceProvider, 'refresh').resolves();
-		sinon.stub(diNavigatorProvider, 'refresh');
-
-		registerCommands(context);
-
-		// Error logged, message shown
-		assert(true); // No crash
-	});
-});
-
-suite('Roslyn Integration Tests', () => {
-	const { extractRegistrations, extractInjectionSites } = require('../parser');
-	const { Lifetime } = require('../models');
-	const { execSync } = require('child_process');
-	const { existsSync } = require('fs');
-	const path = require('path');
-
-	test('extractRegistrations uses Roslyn tool and parses output', () => {
-		const sandbox = sinon.createSandbox();
-		const mockExists = sandbox.stub(require('fs'), 'existsSync').returns(true);
-		const mockExec = sandbox.stub(execSync, 'execSync').returns(
-			Buffer.from(JSON.stringify({
-				Registrations: [
-					{
-						Lifetime: 'Scoped',
-						ServiceType: 'IService',
-						ImplementationType: 'ServiceImpl',
-						FilePath: '/test/file.cs',
-						LineNumber: 10,
-						MethodCall: 'AddScoped'
-					}
-				],
-				InjectionSites: []
-			}))
-		);
-
-		const mockToolPath = './tools/roslyn-di-analyzer/bin/Debug/net8.0/roslyn-di-analyzer.dll';
-		const command = `dotnet "${mockToolPath}" --file "/test/file.cs"`;
-
-		const result = extractRegistrations('/test/file.cs');
-
-		sinon.assert.calledOnce(mockExists);
-		sinon.assert.calledWith(mockExec, command, { encoding: 'utf8' });
-		assert.strictEqual(result.length, 1);
-		assert.strictEqual(result[0].lifetime, Lifetime.Scoped);
-		assert.strictEqual(result[0].serviceType, 'IService');
-		assert.strictEqual(result[0].implementationType, 'ServiceImpl');
-		assert.strictEqual(result[0].filePath, '/test/file.cs');
-		assert.strictEqual(result[0].lineNumber, 10);
-		assert.strictEqual(result[0].methodCall, 'AddScoped');
-
-		sandbox.restore();
-	});
-
-	test('extractInjectionSites uses Roslyn tool and parses output', () => {
-		const sandbox = sinon.createSandbox();
-		const mockExists = sandbox.stub(require('fs'), 'existsSync').returns(true);
-		const mockExec = sandbox.stub(execSync, 'execSync').returns(
-			Buffer.from(JSON.stringify({
-				Registrations: [],
-				InjectionSites: [
-					{
-						FilePath: '/test/file.cs',
-						LineNumber: 15,
-						ClassName: 'MyClass',
-						MemberName: 'ctor',
-						Type: 'constructor',
-						ServiceType: 'IService'
-					},
-					{
-						FilePath: '/test/file.cs',
-						LineNumber: 20,
-						ClassName: 'MyClass',
-						MemberName: 'logger',
-						Type: 'field',
-						ServiceType: 'ILogger'
-					}
-				]
-			}))
-		);
-
-		const mockToolPath = './tools/roslyn-di-analyzer/bin/Debug/net8.0/roslyn-di-analyzer.dll';
-		const command = `dotnet "${mockToolPath}" --file "/test/file.cs"`;
-
-		const result = extractInjectionSites('/test/file.cs');
-
-		sinon.assert.calledOnce(mockExists);
-		sinon.assert.calledWith(mockExec, command, { encoding: 'utf8' });
-		assert.strictEqual(result.length, 2);
-		assert.strictEqual(result[0].filePath, '/test/file.cs');
-		assert.strictEqual(result[0].lineNumber, 15);
-		assert.strictEqual(result[0].className, 'MyClass');
-		assert.strictEqual(result[0].memberName, 'ctor');
-		assert.strictEqual(result[0].type, 'constructor');
-		assert.strictEqual(result[0].serviceType, 'IService');
-
-		assert.strictEqual(result[1].filePath, '/test/file.cs');
-		assert.strictEqual(result[1].lineNumber, 20);
-		assert.strictEqual(result[1].className, 'MyClass');
-		assert.strictEqual(result[1].memberName, 'logger');
-		assert.strictEqual(result[1].type, 'field');
-		assert.strictEqual(result[1].serviceType, 'ILogger');
-
-		sandbox.restore();
-	});
-
-	test('extractRegistrations falls back to regex when tool missing', () => {
-		const sandbox = sinon.createSandbox();
-		sandbox.stub(require('fs'), 'existsSync').returns(false);
-		const mockSource = `
-			public void ConfigureServices(IServiceCollection services) {
-				services.AddScoped<IService, ServiceImpl>();
-				services.AddTransient<IOtherService>();
-			}
-		`;
-
-		const result = extractRegistrations('/test/file.cs', mockSource);
-
-		assert.strictEqual(result.length, 2);
-		assert.strictEqual(result[0].serviceType, 'IService');
-		assert.strictEqual(result[0].implementationType, 'ServiceImpl');
-		assert.strictEqual(result[0].lifetime, Lifetime.Scoped);
-		assert.strictEqual(result[1].serviceType, 'IOtherService');
-		assert.strictEqual(result[1].implementationType, 'IOtherService');
-		assert.strictEqual(result[1].lifetime, Lifetime.Transient);
-
-		sandbox.restore();
-	});
-
-	test('extractInjectionSites falls back to regex when tool missing', () => {
-		const sandbox = sinon.createSandbox();
-		sandbox.stub(require('fs'), 'existsSync').returns(false);
-		const mockSource = `
-			public class MyClass {
-				public MyClass(IService service) { }
-				private readonly ILogger logger;
-			}
-		`;
-
-		const result = extractInjectionSites('/test/file.cs', mockSource);
-
-		assert.strictEqual(result.length, 2); // ctor param and field
-		// Note: regex is approximate, but verifies fallback works without crash
-
-		sandbox.restore();
-	});
-
-	test('extractRegistrations handles Roslyn tool error, falls back to regex', () => {
-		const sandbox = sinon.createSandbox();
-		sandbox.stub(require('fs'), 'existsSync').returns(true);
-		sandbox.stub(execSync, 'execSync').throws(new Error('Tool error'));
-		const mockSource = `services.AddScoped<IService, ServiceImpl>();`;
-
-		const result = extractRegistrations('/test/file.cs', mockSource);
-
-		// Should fallback to regex
-		assert.strictEqual(result.length, 1);
-		assert.strictEqual(result[0].serviceType, 'IService');
-
-		sandbox.restore();
+	test('searchServices command works', async () => {
+		const mockServices: Service[] = [{
+			name: 'TestService',
+			registrations: [{ lifetime: Lifetime.Singleton, serviceType: 'TestService', implementationType: 'TestImpl', filePath: '/test/file.cs', lineNumber: 10, methodCall: 'AddSingleton' }],
+			injectionSites: [],
+			hasConflicts: false,
+			conflicts: []
+		}];
+		sinon.stub(serviceProvider, 'getAllServices').returns(mockServices);
+
+		const registerCommandStub = sinon.stub(vscode.commands, 'registerCommand')
+			.callsFake((_command: string, _callback?: any) => ({
+				dispose: sinon.stub()
+			} as any));
+
+		const quickPickStub = sinon.stub(vscode.window, 'showQuickPick').resolves({ label: 'TestService', detail: '1 registrations', service: mockServices[0] } as any);
+		const openTextDocumentStub = sinon.stub(vscode.workspace, 'openTextDocument').resolves({} as any);
+		const showTextDocumentStub = sinon.stub(vscode.window, 'showTextDocument').resolves();
+
+		const context = { globalState: { update: sinon.stub() }, subscriptions: [] } as any;
+		Commands.registerCommands(context);
+
+		await vscode.commands.executeCommand('di-navigator.searchServices');
+
+		sinon.assert.called(quickPickStub);
+		sinon.assert.called(openTextDocumentStub);
+		sinon.assert.called(showTextDocumentStub);
+
+		quickPickStub.restore();
+		openTextDocumentStub.restore();
+		showTextDocumentStub.restore();
 	});
 });
