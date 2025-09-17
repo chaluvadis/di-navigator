@@ -61,9 +61,7 @@ This tool is particularly useful in large .NET solutions where DI setup is sprea
    - Projects → Lifetimes (color-coded) → Services (with counts for registrations/sites).
    - Click a service to go to its primary implementation.
    - Expand services to see injection sites.
-4. **Navigate**:
-   - Right-click or use commands like `DI Navigator: Go to Implementation` / `Go to Injection Site`.
-5. **Clear/Refresh**: Use `DI Navigator: Clear Project Selection` to scan the full workspace.
+4. **Clear/Refresh**: Use `DI Navigator: Clear Project Selection` to scan the full workspace.
 
 Example Tree View:
 ```
