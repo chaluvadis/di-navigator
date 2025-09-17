@@ -2,13 +2,17 @@ import {
   TreeItem, TreeDataProvider, EventEmitter,
   TreeItemCollapsibleState, ThemeIcon, ProviderResult
 } from 'vscode';
-import { ProjectDI, ServiceGroup, Service, InjectionSite, Conflict, ConflictItem } from './models';
-import { serviceProvider } from './serviceProvider';
+import {
+  ProjectDI, ServiceGroup,
+  Service, InjectionSite,
+  Conflict, ConflictItem
+} from './models';
 import {
   ICON_FOLDER, ICON_CLASS, ICON_WARNING,
   COMMAND_GO_TO_IMPL, TITLE_GO_TO_IMPL, ICON_METHOD,
   COMMAND_GO_TO_SITE, TITLE_GO_TO_SITE
 } from './const';
+import { serviceProvider } from './serviceProvider';
 
 const getConflictItems = (conflicts: Conflict[]): ConflictItem[] => {
   return conflicts.map(conflict => ({
@@ -32,6 +36,8 @@ const isService = (element: any): element is Service =>
 const isConflictItem = (element: any): element is ConflictItem =>
   element?.type !== undefined && element?.details !== undefined;
 
+const isTreeItem = (element: any): element is TreeItem => element instanceof TreeItem;
+
 export class DINavigatorProvider implements TreeDataProvider<TreeItem | ProjectDI | ServiceGroup | Service | InjectionSite | ConflictItem> {
   private _onDidChangeTreeData = new EventEmitter<ProjectDI | ServiceGroup | Service | InjectionSite | ConflictItem | undefined>();
 
@@ -42,11 +48,22 @@ export class DINavigatorProvider implements TreeDataProvider<TreeItem | ProjectD
       const projectItem = new TreeItem(element.projectName, TreeItemCollapsibleState.Collapsed);
       let totalServices = 0;
       element.serviceGroups.forEach(g => totalServices += g.services.length);
-      const desc = totalServices > 0
-        ? `${element.serviceGroups.length} lifetimes, ${totalServices} services`
-        : 'No registrations found';
+      let desc = `${element.serviceGroups.length} lifetimes, ${totalServices} services`;
+      if (element.cycles && element.cycles.length > 0) {
+        desc += `, ${element.cycles.length} cycles`;
+      }
+      const graph = element.dependencyGraph;
+      if (graph) {
+        const nodes = Object.keys(graph).length;
+        const edges = Object.values(graph).reduce((acc, deps) => acc + deps.length, 0);
+        desc += `, ${nodes} nodes, ${edges} edges`;
+        projectItem.tooltip = `${element.projectPath}\nDependency Graph: ${nodes} nodes, ${edges} edges`;
+      }
       projectItem.description = desc;
       projectItem.iconPath = new ThemeIcon('file-directory');
+      if (element.cycles && element.cycles.length > 0) {
+        projectItem.iconPath = new ThemeIcon(ICON_WARNING);
+      }
       projectItem.tooltip = element.projectPath;
       return projectItem;
     } else if (isServiceGroup(element)) {
@@ -90,11 +107,19 @@ export class DINavigatorProvider implements TreeDataProvider<TreeItem | ProjectD
   }
 
   getChildren(element?: TreeItem | ProjectDI | ServiceGroup | Service | InjectionSite | ConflictItem)
-    : ProviderResult<ProjectDI[] | ServiceGroup[] | Service[] | (InjectionSite | ConflictItem)[]> {
+    : ProviderResult<(TreeItem | ProjectDI | ServiceGroup | Service | InjectionSite | ConflictItem)[]> {
     if (!element) {
       return serviceProvider.getProjectDI();
     } else if (isProjectDI(element)) {
-      return element.serviceGroups;
+      const children: (ServiceGroup | TreeItem)[] = [...element.serviceGroups];
+      if (element.cycles && element.cycles.length > 0) {
+        const cyclesNode = new TreeItem('Cycles', TreeItemCollapsibleState.Collapsed);
+        cyclesNode.description = `${element.cycles.length} cycles detected`;
+        cyclesNode.iconPath = new ThemeIcon(ICON_WARNING);
+        cyclesNode.contextValue = element.projectPath; // To identify parent project
+        children.push(cyclesNode);
+      }
+      return children;
     } else if (isServiceGroup(element)) {
       return element.services;
     } else if (isService(element)) {
@@ -103,6 +128,22 @@ export class DINavigatorProvider implements TreeDataProvider<TreeItem | ProjectD
         children.push(...getConflictItems(element.conflicts));
       }
       return children;
+    } else if (isTreeItem(element) && element.contextValue && typeof element.contextValue === 'string' && element.label === 'Cycles') {
+      const project = serviceProvider.getProjectDI().find(p => p.projectPath === element.contextValue);
+      if (project && project.cycles) {
+        return project.cycles.map(cycle => {
+          const cycleItem: ConflictItem = {
+            type: 'Cycle',
+            details: cycle
+          };
+          const treeItem = new TreeItem(cycle, TreeItemCollapsibleState.None);
+          treeItem.description = cycle;
+          treeItem.iconPath = new ThemeIcon(ICON_WARNING);
+          treeItem.tooltip = cycle;
+          return treeItem;
+        });
+      }
+      return [];
     } else {
       return [];
     }

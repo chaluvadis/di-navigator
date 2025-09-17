@@ -78,7 +78,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // Initial detection and setup (do not block activation; run scan in background)
   // Kick off detection/scan but don't await here so the extension activates quickly.
   updateWorkspaceContext().catch(err => console.error('Error during initial workspace detection:', err));
-// Watch for relevant file changes to update context and refresh
+  // Watch for relevant file changes to update context and refresh
 
   const debouncedUpdate = debounce(updateWorkspaceContext, 500); // 500ms debounce
 

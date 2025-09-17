@@ -9,3 +9,4 @@ testdata/
 *.vsix
 dist/
 package-lock.json
+analysis.md

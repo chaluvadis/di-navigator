@@ -22,3 +22,6 @@ out/**
 .vscode-test/**
 node_modules/**
 di-navigator.sln
+readme.md
+package-lock.json
+analysis.md

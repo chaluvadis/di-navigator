@@ -23,7 +23,7 @@
 
 ## Overview
 
-**DI & Service Navigator** is a Visual Studio Code extension designed to help .NET developers understand, visualize, and navigate Dependency Injection (DI) configurations in their projects. It scans C# code for Microsoft.Extensions.DependencyInjection registrations (e.g., `services.AddScoped<IUserService, UserService>()`) and injection sites (e.g., constructor parameters), groups them by project and lifetime, detects common issues like duplicates or unused services, and provides a tree view in the Explorer sidebar for easy navigation.
+**DI & Service Navigator** is a Visual Studio Code extension designed to help .NET developers understand, visualize, and navigate Dependency Injection (DI) configurations in their projects. It scans C# code for Microsoft.Extensions.DependencyInjection registrations (e.g., `services.AddScoped<IUserService, UserService>()`) and injection sites (e.g., constructor parameters), groups them by project and lifetime, and provides a tree view in the Explorer sidebar for easy navigation.
 
 This tool is particularly useful in large .NET solutions where DI setup is spread across multiple files, making it hard to track services, lifetimes, and dependencies.
 
@@ -34,8 +34,7 @@ This tool is particularly useful in large .NET solutions where DI setup is sprea
 - **DI Registration Discovery**: Automatically detects registrations using Roslyn-based parsing with regex fallback for robustness.
 - **Injection Site Mapping**: Identifies constructor parameters and associates them with registered services.
 - **Lifetime Grouping**: Organizes services by Singleton, Scoped, and Transient lifetimes with color-coded visuals.
-- **Conflict Detection**: Flags issues like duplicate implementations, multiple impls per lifetime, and unused services.
-- **Tree View Navigation**: Interactive sidebar view to browse projects > lifetimes > services > injection sites/conflicts.
+- **Tree View Navigation**: Interactive sidebar view to browse projects > lifetimes > services > injection sites.
 - **Go To Commands**: Quickly jump to registration implementations or injection sites in the editor.
 - **Project Selection**: Scan specific projects or the entire workspace; supports multi-root workspaces.
 - **Auto-Refresh**: Watches for file changes and refreshes analysis dynamically.
@@ -59,22 +58,20 @@ This tool is particularly useful in large .NET solutions where DI setup is sprea
    - Run `DI Navigator: Select Project` (Ctrl+Shift+P) to scan all or specific projects.
    - Or use `DI Navigator: Refresh Services` to re-scan.
 3. **Browse Services**: Expand the tree:
-   - Projects → Lifetimes (color-coded) → Services (with counts for registrations/sites/conflicts).
+   - Projects → Lifetimes (color-coded) → Services (with counts for registrations/sites).
    - Click a service to go to its primary implementation.
-   - Expand services to see injection sites or conflicts.
+   - Expand services to see injection sites.
 4. **Navigate**:
    - Right-click or use commands like `DI Navigator: Go to Implementation` / `Go to Injection Site`.
-   - For conflicts, use `DI Navigator: Resolve Conflicts` to view and suggest fixes.
 5. **Clear/Refresh**: Use `DI Navigator: Clear Project Selection` to scan the full workspace.
 
 Example Tree View:
 ```
 MyProject
 ├── Singleton (1 service)
-│   └── IUserService (2 regs, 1 site, 1 conflict)
+│   └── IUserService (2 regs, 1 site)
 │       ├── UserServiceImpl.cs:42
 │       └── Injection: UserController.ctor (IUserService)
-│       └── Conflict: DuplicateImplementation
 └── Scoped (3 services)
     └── ...
 ```
@@ -82,7 +79,6 @@ MyProject
 ---
 
 ## Technical Details
-
 - **Parsing**: Uses a custom Roslyn analyzer (C# project in `tools/roslyn-di-analyzer/`) for accurate AST traversal. Falls back to regex for parse errors.
 - **Models**: Services grouped by [Lifetime](src/models.ts#L3) (Singleton/Scoped/Transient) and [ProjectDI](src/models.ts#L33).
 - **Tree View**: Custom [TreeDataProvider](src/treeView.ts) with icons and commands.
@@ -90,6 +86,10 @@ MyProject
 - **Build**: NPM scripts compile TS to JS via esbuild and build the Roslyn parser via `dotnet build`.
 
 The extension scans **/*.cs files in projects, excluding configured folders.
+
+## Architecture
+
+The di-navigator extension follows a modular architecture with clear separation of concerns: activation in extension.ts, data models in models.ts, parsing in parser.ts, state management in serviceProvider.ts, tree view in treeView.ts, and commands in commands.ts. Key strengths include reactivity via file watchers and debouncing, lightweight parsing without heavy dependencies, user-centric features like quick picks and navigation, and extensibility through hierarchical models.
 
 ---
 
@@ -99,6 +99,7 @@ The extension scans **/*.cs files in projects, excluding configured folders.
 - **.NET SDK**: 8.0+ (for Roslyn parser; built manually via `dotnet build` in `tools/roslyn-di-analyzer/`).
 - **Workspace**: .NET project(s) with C# files and DI registrations (Microsoft DI only).
 - **Permissions**: Read access to workspace files.
+- **OmniSharp**: Install the [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) (powered by OmniSharp) from the VS Code Marketplace for full C# language support, including IntelliSense, debugging, and project loading.
 
 ---
 
@@ -112,40 +113,6 @@ Customize via VS Code Settings (Ctrl+,) under "DI Navigator":
 No other settings yet; future versions may include parsing toggles.
 
 ---
-
-## Troubleshooting
-
-- **No DI Navigator View**: Ensure workspace has .NET files (.csproj/.sln/.cs). Run `DI Navigator: Refresh Services`.
-- **Parsing Errors**: Check Output panel (DI Navigator) for logs. Roslyn requires .NET SDK; install from [dotnet.microsoft.com](https://dotnet.microsoft.com).
-- **Slow Scans**: Large solutions? Exclude more folders or limit to selected projects.
-- **Fallback to Regex**: Seen in logs if Roslyn fails (e.g., invalid C#). Report issues with sample code.
-- **Conflicts Not Detected**: Current detection is basic; misses advanced cases like cycles.
-- **Build Issues**: Run `dotnet build` manually in `tools/roslyn-di-analyzer/`.
-
-If issues persist, file a [GitHub issue](https://github.com/chaluvadis/di-navigator/issues) with logs and a minimal repro.
-
----
-
-## Packaging the Extension
-
-1. Install dependencies: `npm install`
-2. Build TypeScript: `npm run package` (compiles TS via esbuild).
-3. Build Roslyn Analyzer: `cd tools/roslyn-di-analyzer && dotnet build` (builds the .NET parser).
-4. Create VSIX: Use `vsce package` (install via `npm i -g @vscode/vsce`).
-5. Publish: `vsce publish` (requires Azure DevOps or GitHub setup).
-
----
-
-## Roadmap
-
-- **Short-Term**: Enhance parsing for named registrations/Configure; implement code edits for conflict resolution; add search/filter in tree view.
-- **Medium-Term**: Advanced conflict detection (cycles, lifetime mismatches); incremental parsing; graph visualization.
-- **Long-Term**: Support other DI containers (Autofac); export reports; full semantic analysis with type resolution.
-
-Contributions welcome!
-
----
-
 ## Contributing
 
 1. Fork the repo and clone: `git clone https://github.com/chaluvadis/di-navigator`

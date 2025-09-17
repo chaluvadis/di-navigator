@@ -1,258 +1,202 @@
-import { Registration, Lifetime, InjectionSite } from './models';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Registration, InjectionSite, Service, ServiceGroup, ProjectDI, Lifetime, Colors } from './models';
+import { LIFETIMES } from './const';
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
-import {
-  ADD_PREFIX,
-  SCOPED_SUFFIX,
-  SINGLETON_SUFFIX,
-  TRANSIENT_SUFFIX
-} from './const';
 
-export const isValidDIMethod = (methodName: string): boolean =>
-  methodName.startsWith(ADD_PREFIX) &&
-  (methodName.endsWith(SINGLETON_SUFFIX) ||
-    methodName.endsWith(SCOPED_SUFFIX) ||
-    methodName.endsWith(TRANSIENT_SUFFIX));
-
-export const getLifetimeFromMethod = (methodName: string): Lifetime => {
-  if (methodName.includes(SINGLETON_SUFFIX)) {
-    return Lifetime.Singleton;
-  } else if (methodName.includes(SCOPED_SUFFIX)) {
-    return Lifetime.Scoped;
-  } else {
-    return Lifetime.Transient;
+const getLifetimeFromString = (lifetimeStr: string): Lifetime => {
+  switch (lifetimeStr) {
+    case 'Singleton': return Lifetime.Singleton;
+    case 'Scoped': return Lifetime.Scoped;
+    case 'Transient': return Lifetime.Transient;
+    default: return Lifetime.Transient;
   }
 };
 
-export const parseCsharp = (_sourceCode: string): null => {
-  // Placeholder: parsing is performed by `extractRegistrations`/`extractInjectionSites`.
-  // Kept for API compatibility; intentionally returns null.
-  return null;
-};
-
-export const extractRegistrations = (filePath: string, sourceCode?: string): Registration[] => {
+export const parseProject = (projectPath: string): ProjectDI => {
+  const projectName = path.basename(projectPath);
   const registrations: Registration[] = [];
-
-  // Use Roslyn tool
-  try {
-    const toolPath = './tools/roslyn-di-analyzer/bin/Debug/net8.0/roslyn-di-analyzer.dll';
-    if (existsSync(toolPath)) {
-      const command = `dotnet "${toolPath}" --file "${filePath}"`;
-      const output = execSync(command, { encoding: 'utf8' });
-      const result = JSON.parse(output);
-      for (const reg of result.Registrations) {
-        const lifetime = getLifetimeFromMethod(reg.MethodCall);
-        registrations.push({
-          lifetime,
-          serviceType: reg.ServiceType,
-          implementationType: reg.ImplementationType,
-          name: undefined,
-          filePath: reg.FilePath,
-          lineNumber: reg.LineNumber,
-          methodCall: reg.MethodCall
-        });
-      }
-    } else {
-      console.warn('Roslyn tool not built, falling back to regex.');
-      // Fallback regex
-      let fullSource = sourceCode ?? '';
-      if (!fullSource) {
-        fullSource = require('fs').readFileSync(filePath, 'utf8');
-      }
-      const diRegex = /services\.(Add(?:Singleton|Scoped|Transient))\s*<([^>]+)>(?:\s*,\s*([^>]+))?\s*\(\s*(new\s+[^)]+)?\s*\)/g;
-      let match: RegExpExecArray | null;
-      while ((match = diRegex.exec(fullSource)) !== null) {
-        const methodName = match[1];
-        const lifetime = getLifetimeFromMethod(methodName);
-        const serviceType = match[2].trim();
-        const implType = match[3] ? match[3].trim() : serviceType;
-        const lineNumber = fullSource.substring(0, match.index).split('\n').length;
-        registrations.push({
-          lifetime,
-          serviceType,
-          implementationType: implType,
-          name: undefined,
-          filePath,
-          lineNumber,
-          methodCall: methodName
-        });
-      }
-    }
-  } catch (error) {
-    console.error('Error running Roslyn tool:', error);
-    // Fallback to regex as above
-  }
-
-  return registrations;
-};
-
-export const extractInjectionSites = (filePath: string, sourceCode?: string): InjectionSite[] => {
   const injectionSites: InjectionSite[] = [];
+  const cycles: string[] = [];
+  let dependencyGraph: Record<string, string[]> = {};
 
-  // Use Roslyn tool
   try {
-    const toolPath = './tools/roslyn-di-analyzer/bin/Debug/net8.0/roslyn-di-analyzer.dll';
-    if (existsSync(toolPath)) {
-      const command = `dotnet "${toolPath}" --file "${filePath}"`;
-      const output = execSync(command, { encoding: 'utf8' });
-      const result = JSON.parse(output);
-      for (const site of result.InjectionSites) {
-        injectionSites.push({
-          filePath: site.FilePath,
-          lineNumber: site.LineNumber,
-          className: site.ClassName,
-          memberName: site.MemberName,
-          type: site.Type as 'constructor' | 'field',
-          serviceType: site.ServiceType
-        });
-      }
-    } else {
-      console.warn('Roslyn tool not built, falling back to regex.');
-      // Fallback regex
-      let fullSource = sourceCode ?? '';
-      if (!fullSource) {
-        fullSource = require('fs').readFileSync(filePath, 'utf8');
-      }
-      // Constructor params
-      const ctorRegex = /public\s+([\w\.]+)\s*\(\s*([\w<>\.]+)\s+([\w]+)(?:\s*,\s*([\w<>\.]+)\s+([\w]+))*\s*\)/g;
-      let ctorMatch: RegExpExecArray | null;
-      while ((ctorMatch = ctorRegex.exec(fullSource)) !== null) {
-        const className = ctorMatch[1];
-        const serviceType = ctorMatch[2];
-        const memberName = ctorMatch[3];
-        const lineNumber = fullSource.substring(0, ctorMatch.index).split('\n').length + 1;
-        injectionSites.push({
-          filePath,
-          lineNumber,
-          className,
-          memberName,
-          type: 'constructor',
-          serviceType
-        });
-      }
-      // Fields
-      const fieldRegex = /private\s+(readonly\s+)?([\w<>\.]+)\s+([\w_]+);/g;
-      let fieldMatch: RegExpExecArray | null;
-      while ((fieldMatch = fieldRegex.exec(fullSource)) !== null) {
-        const serviceType = fieldMatch[2];
-        const memberName = fieldMatch[3];
-        const classMatch = fullSource.substring(0, fieldMatch.index).match(/public\s+class\s+([\w]+)/);
-        const className = classMatch ? classMatch[1] : '';
-        const lineNumber = fullSource.substring(0, fieldMatch.index).split('\n').length + 1;
-        injectionSites.push({
-          filePath,
-          lineNumber,
-          className,
-          memberName,
-          type: 'field',
-          serviceType
-        });
-      }
+    // Primary: Roslyn tool
+    const toolPath = path.join('.', 'tools', 'roslyn-di-analyzer', 'bin', 'Debug', 'net8.0', 'roslyn-di-analyzer.dll');
+    if (!fs.existsSync(toolPath)) {
+      throw new Error('Roslyn tool not built.');
     }
+
+    const command = `dotnet "${toolPath}" --project "${projectPath}"`;
+    const output = execSync(command, { encoding: 'utf8', cwd: path.dirname(projectPath) });
+    const analysisResult = JSON.parse(output);
+
+    // Map Registrations
+    for (const reg of analysisResult.Registrations) {
+      const lifetime = getLifetimeFromString(reg.Lifetime);
+      registrations.push({
+        id: reg.Id,
+        lifetime,
+        serviceType: reg.ServiceType,
+        implementationType: reg.ImplementationType || reg.ServiceType,
+        filePath: reg.FilePath,
+        lineNumber: reg.LineNumber,
+        methodCall: reg.MethodCall
+      });
+    }
+
+    // Map InjectionSites
+    for (const site of analysisResult.InjectionSites) {
+      injectionSites.push({
+        filePath: site.FilePath,
+        lineNumber: site.LineNumber,
+        className: site.ClassName,
+        memberName: site.MemberName,
+        type: site.Type as 'constructor' | 'method' | 'field',
+        serviceType: site.ServiceType,
+        linkedRegistrationIds: site.LinkedRegistrationIds || []
+      });
+    }
+
+    cycles.push(...(analysisResult.Cycles || []));
+    dependencyGraph = analysisResult.DependencyGraph || {};
+
+    console.log(`Parsed project ${projectName}: ${registrations.length} registrations, ${injectionSites.length} sites, ${cycles.length} cycles`);
   } catch (error) {
-    console.error('Error running Roslyn tool for injection sites:', error);
-    // Fallback to regex as above
+    console.error(`Error parsing project ${projectPath}:`, error);
+    // Fallback to regex scanning
+    try {
+      const csFiles = findCsFilesSync(projectPath);
+      for (const filePath of csFiles) {
+        const source = fs.readFileSync(filePath, 'utf8');
+        // Registration regex for builder.Services or services
+        const regRegex = /(builder\.Services|services)\.Add(?:Scoped|Singleton|Transient)<([^>]+)>(?:,\s*([^>]+))?\s*\(\s*(new\s+[^)]+)?\s*\)/g;
+        let regMatch;
+        while ((regMatch = regRegex.exec(source)) !== null) {
+          const [, , serviceType, implType] = regMatch;
+          const methodName = regMatch[0].match(/Add(\w+)/)?.[1] || 'Transient';
+          const lifetime = getLifetimeFromString(methodName);
+          const lineNumber = source.substring(0, regMatch.index).split('\n').length;
+          registrations.push({
+            id: `reg-${path.basename(filePath)}-${lineNumber}`,
+            lifetime,
+            serviceType: serviceType.trim(),
+            implementationType: implType ? implType.trim() : serviceType.trim(),
+            filePath,
+            lineNumber,
+            methodCall: regMatch[0]
+          });
+        }
+        // Constructor injection regex
+        const ctorRegex = /public\s+([^\s(]+)\s*\(\s*([^\)]+)\s*\)/g;
+        let ctorMatch;
+        while ((ctorMatch = ctorRegex.exec(source)) !== null) {
+          const className = ctorMatch[1];
+          const paramsStr = ctorMatch[2];
+          const paramMatches = paramsStr.match(/([^\s,]+)\s+[\w]+/g) || [];
+          const lineNumber = source.substring(0, ctorMatch.index).split('\n').length;
+          for (const paramMatch of paramMatches) {
+            const serviceType = paramMatch.trim();
+            injectionSites.push({
+              filePath,
+              lineNumber,
+              className,
+              memberName: className,
+              type: 'constructor',
+              serviceType,
+              linkedRegistrationIds: []
+            });
+          }
+        }
+      }
+      console.log(`Fallback parsed ${registrations.length} registrations, ${injectionSites.length} sites for ${projectName}`);
+    } catch (fallbackError) {
+      console.error(`Fallback failed for ${projectPath}:`, fallbackError);
+    }
   }
 
-  return injectionSites;
+  // Aggregate into Services
+  const servicesByType = new Map<string, Service>();
+  for (const reg of registrations) {
+    let service = servicesByType.get(reg.serviceType);
+    if (!service) {
+      service = {
+        name: reg.serviceType,
+        registrations: [],
+        injectionSites: [],
+        hasConflicts: false,
+        conflicts: []
+      };
+      servicesByType.set(reg.serviceType, service);
+    }
+    service.registrations.push(reg);
+  }
+
+  // Associate injection sites
+  for (const site of injectionSites) {
+    const service = servicesByType.get(site.serviceType);
+    if (service) {
+      service.injectionSites.push(site);
+    }
+  }
+
+  // Group by lifetime
+  const serviceGroups: ServiceGroup[] = [];
+  for (const lifetime of LIFETIMES) {
+    const lifetimeServices = Array.from(servicesByType.values()).filter(s => s.registrations.some(r => r.lifetime === lifetime));
+    if (lifetimeServices.length > 0) {
+      serviceGroups.push({
+        lifetime,
+        services: lifetimeServices,
+        color: getLifetimeColor(lifetime)
+      });
+    }
+  }
+
+  return {
+    projectPath,
+    projectName,
+    serviceGroups,
+    cycles,
+    dependencyGraph
+  };
 };
 
+const getLifetimeColor = (lifetime: Lifetime): string => {
+  switch (lifetime) {
+    case Lifetime.Singleton: return Colors.Singleton;
+    case Lifetime.Scoped: return Colors.Scoped;
+    case Lifetime.Transient: return Colors.Transient;
+    case Lifetime.Others: return Colors.Others;
+    default: return Colors.Default;
+  }
+};
 
-
-export interface TypeArgs {
-  serviceType: string;
-  implType: string;
+function findCsFilesSync(dir: string): string[] {
+  let files: string[] = [];
+  try {
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    for (const item of items) {
+      const fullPath = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        files = files.concat(findCsFilesSync(fullPath));
+      } else if (item.name.endsWith('.cs')) {
+        files.push(fullPath);
+      }
+    }
+  } catch (err) {
+    console.error(`Error reading directory ${dir}:`, err);
+  }
+  return files;
 }
 
-
-
-export const isServicesChain = (node: any): boolean => {
-  if (node?.type === 'identifier') {
-    return node.text === 'services';
-  }
-  if (node?.type === 'member_access_expression') {
-    const nameChild = node.childForFieldName('name');
-    if (nameChild?.type === 'identifier' && nameChild.text.startsWith('Add')) {
-      const baseChild = node.childForFieldName('base') || node.childForFieldName('operand') || node.childForFieldName('expression');
-      if (baseChild && isServicesChain(baseChild)) {
-        return true;
-      }
-    }
-  }
-  return false;
-};
-
-
-
-export const extractTypeArguments = (nameNode: any): TypeArgs => {
-  const typeArgsNode = nameNode.childForFieldName('type_arguments');
-  if (!typeArgsNode || typeArgsNode.type !== 'type_argument_list') {
-    return { serviceType: 'Unknown', implType: 'Unknown' };
-  }
-  const children = typeArgsNode.namedChildren || [];
-  if (children.length === 0) {
-    return { serviceType: 'Unknown', implType: 'Unknown' };
-  }
-  if (children.length === 1) {
-    return { serviceType: children[0].text, implType: children[0].text };
-  }
-  return { serviceType: children[0].text, implType: children[1].text };
-};
-
-
-
-export const extractImplFromArguments = (argList: any, serviceType: string): string => {
-  const args = argList.namedChildren || [];
-  if (args.length === 0) {
-    return serviceType;
-  }
-  const firstArg = args[0];
-  if (!firstArg || firstArg.type !== 'argument') {
-    return serviceType;
-  }
-  const argContent = firstArg.namedChildren?.[0];
-  if (!argContent) {
-    return serviceType;
-  }
-  if (argContent.type === 'new_expression') {
-    const ctor = argContent.childForFieldName('constructor');
-    if (ctor?.type === 'simple_type') {
-      return ctor.text;
-    }
-    return serviceType;
-  } else if (argContent.type === 'lambda_expression') {
-    return 'Factory';
-  } else if (argContent.type === 'identifier') {
-    return argContent.text;
-  }
-  return serviceType;
-};
-
-
-
-export const extractConstructorInjectionSites = (constructorNode: any, className: string, filePath: string): InjectionSite[] => {
-  const sites: InjectionSite[] = [];
-  const paramsNode = constructorNode.childForFieldName('parameters');
-  if (!paramsNode || paramsNode.type !== 'parameter_list') {
-    return sites;
-  }
-  const params = paramsNode.namedChildren || [];
-  for (const param of params) {
-    if (param.type === 'parameter') {
-      const typeNode = param.childForFieldName('type');
-      const paramStart = param.startPosition;
-      const lineNumber = paramStart ? paramStart.row + 1 : 0;
-      if (typeNode?.type === 'simple_type' && lineNumber > 0) {
-        sites.push({
-          filePath,
-          lineNumber,
-          className,
-          memberName: constructorNode.text || 'ctor',
-          type: 'constructor',
-          serviceType: typeNode.text
-        });
-      }
-    }
-  }
-  return sites;
-};
+// Legacy exports
+export const extractRegistrations = (): Registration[] => [];
+export const extractInjectionSites = (): InjectionSite[] => [];
+export const isValidDIMethod = (): boolean => false;
+export const getLifetimeFromMethod = (): Lifetime => Lifetime.Transient;
+export const parseCsharp = (): null => null;
+export const isServicesChain = (): boolean => false;
+export const extractTypeArguments = (): { serviceType: string; implType: string; } => ({ serviceType: '', implType: '' });
+export const extractImplFromArguments = (_argList: any, serviceType: string): string => serviceType;
+export const extractConstructorInjectionSites = (_constructorNode: any, _className: string, _filePath: string): InjectionSite[] => [];
