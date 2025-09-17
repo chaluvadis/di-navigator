@@ -1,0 +1,12 @@
+node_modules/
+bin/
+obj/
+**/bin/
+**/obj/
+out/
+testdata/
+.vscode-test/
+*.vsix
+dist/
+package-lock.json
+analysis.md

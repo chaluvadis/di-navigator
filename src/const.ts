@@ -18,12 +18,13 @@ export const DEFAULT_EXCLUDE_FOLDERS = ['**/bin/**', '**/obj/**', '**/Properties
 export const NET_FILE_PATTERNS = ['**/*.csproj', '**/*.sln', '**/*.slnx', '**/*.cs'];
 export const CONFIG_SECTION = 'diNavigator';
 export const CONFIG_EXCLUDE_FOLDERS = 'excludeFolders';
+export const CONFIG_MAX_PARALLEL = 'maxParallel';
+export const CONFIG_ENABLE_WATCHER = 'enableWatcher';
 export const ICON_FOLDER = 'folder';
 export const ICON_CLASS = 'symbol-class';
 export const ICON_WARNING = 'warning';
 export const ICON_METHOD = 'symbol-method';
 export const LIFETIMES = [Lifetime.Singleton, Lifetime.Scoped, Lifetime.Transient];
-
 export const SERVICES = 'services';
 export const ADD_PREFIX = 'Add';
 export const SINGLETON_SUFFIX = 'Singleton';

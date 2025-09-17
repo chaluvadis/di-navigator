@@ -1,145 +1,132 @@
-import { ExtensionContext, Uri, workspace, RelativePattern } from 'vscode';
-import * as CONSTANTS from './const';
+import { ExtensionContext, workspace, RelativePattern } from 'vscode';
+import * as path from 'path';
 import {
-  ServiceGroup, Service, Registration,
-  Lifetime, Colors, InjectionSite
+  ProjectDI, ServiceGroup, Service,
+  Lifetime, Colors
 } from './models';
+import { parseProject } from './parser';
 import {
-  parseCsharp,
-  extractRegistrations,
-  extractInjectionSites
-} from './parser';
-import path from 'path';
+  CONFIG_SECTION, CONFIG_EXCLUDE_FOLDERS,
+  DEFAULT_EXCLUDE_FOLDERS, GLOBAL_STATE_KEY, LIFETIMES
+} from './const';
+
 export class ServiceProvider {
-  private serviceGroups: ServiceGroup[] = [];
-  private cache = new Map<string, ServiceGroup[]>();
+  private projectDI: ProjectDI[] = [];
+  private allServices: Service[] = [];
   private context: ExtensionContext | undefined;
+  private dirty = false;
 
   setContext(context: ExtensionContext): void {
     this.context = context;
   }
+
   getExcludeGlob(): string {
-    const config = workspace.getConfiguration(CONSTANTS.CONFIG_SECTION);
-    const patterns = config.get<string[]>(CONSTANTS.CONFIG_EXCLUDE_FOLDERS) ?? Array.from(CONSTANTS.DEFAULT_EXCLUDE_FOLDERS);
+    const config = workspace.getConfiguration(CONFIG_SECTION);
+    const patterns = config.get<string[]>(CONFIG_EXCLUDE_FOLDERS) ?? Array.from(DEFAULT_EXCLUDE_FOLDERS);
     return patterns.length > 1 ? `{${patterns.join(',')}}` : patterns[0];
   }
+
   clearState(): void {
     if (this.context) {
-      this.context.globalState.update('diNavigator.selectedProject', undefined);
+      this.context.globalState.update(GLOBAL_STATE_KEY, undefined);
     }
-    this.serviceGroups = [];
-    this.cache.clear();
+    this.projectDI = [];
+    this.allServices = [];
+    this.dirty = false;
   }
 
-  async collectRegistrations(): Promise<void> {
+  // Removed legacy parseFile; now using parseProject
+
+  async collectRegistrations(progress?: { report: (info: { increment?: number; message?: string; }) => void; }): Promise<void> {
     if (!this.context) {
       console.error('Extension context not set. Cannot access global state.');
       return;
     }
 
-    const registrations: Registration[] = [];
+    const excludeGlob = this.getExcludeGlob();
 
-    // Get selected project from global state
-    const selectedProject = this.context?.globalState.get(CONSTANTS.GLOBAL_STATE_KEY) as string | undefined;
-
-    let csFiles: Uri[];
-    if (selectedProject) {
-      const { dir: projectDir } = path.parse(selectedProject);
-      const projectUri = Uri.file(projectDir);
-      const includePattern = new RelativePattern(projectUri, '**/*.cs');
-      const excludeGlob = this.getExcludeGlob();
-      csFiles = await workspace.findFiles(includePattern, excludeGlob);
-      console.log(`Scoped to selected project: ${selectedProject}`);
-    } else {
-      const excludeGlob = this.getExcludeGlob();
-      csFiles = await workspace.findFiles('**/*.cs', excludeGlob);
-      console.log('Scanning entire workspace for DI registrations');
+    const allProjectDirs: string[] = [];
+    if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
+      console.warn('No workspace folders found.');
+      return;
     }
-    console.log(`Scanning ${csFiles.length} C# files for DI registrations`);
 
-    let totalFiles = 0;
-    let totalRegs = 0;
-    let totalSites = 0;
-    const allInjectionSites: InjectionSite[] = [];
-    for (const file of csFiles) {
-      totalFiles++;
+    for (const folder of workspace.workspaceFolders) {
+      const folderPath = folder.uri.fsPath;
       try {
-        const document = await workspace.openTextDocument(file);
-        const sourceCode = document.getText();
-        const rootNode = parseCsharp(sourceCode);
-        const fileRegs = extractRegistrations(rootNode, file.fsPath, sourceCode);
-        totalRegs += fileRegs.length;
-        registrations.push(...fileRegs);
-        const fileSites = extractInjectionSites(rootNode, file.fsPath, sourceCode);
-        totalSites += fileSites.length;
-        allInjectionSites.push(...fileSites);
-        if (fileRegs.length > 0) {
-          console.log(`Parsed ${file.fsPath}: found ${fileRegs.length} registrations`);
-        }
-        if (fileSites.length > 0) {
-          console.log(`Parsed ${file.fsPath}: found ${fileSites.length} injection sites`);
-        }
+        const projectPattern = new RelativePattern(folder, '**/*.{csproj,sln}');
+        const projectFiles = await workspace.findFiles(projectPattern, excludeGlob);
+
+        const slnFiles = projectFiles.filter(f => f.fsPath.endsWith('.sln'));
+        const csprojFiles = projectFiles.filter(f => f.fsPath.endsWith('.csproj'));
+        console.log(`Found ${slnFiles.length} solution files and ${csprojFiles.length} project files in folder ${folder.name}`);
+        console.log('Solution files:', slnFiles.map(f => f.fsPath));
+        console.log('Project files:', csprojFiles.map(f => f.fsPath));
+        const slnDirs = [...new Set(slnFiles.map(f => path.dirname(f.fsPath)))];
+        const csprojDirs = csprojFiles.map(f => path.dirname(f.fsPath));
+
+        // Filter csproj dirs that are under sln dirs within this folder
+        const filteredCsprojDirs = csprojDirs.filter(dir => !slnDirs.some(slnDir => {
+          const rel = path.relative(slnDir, dir);
+          return rel !== '' && !rel.startsWith('..');
+        }));
+
+        // For sln, use the sln dir; for standalone csproj, use their dir
+        const rootProjectDirs = [...slnDirs, ...filteredCsprojDirs].map(dir => path.resolve(folderPath, path.relative(folderPath, dir)));
+        allProjectDirs.push(...rootProjectDirs);
       } catch (error) {
-        console.error(`Error parsing ${file.fsPath}:`, error);
-      }
-    }
-    console.log(`Total C# files scanned: ${totalFiles}, Total registrations found: ${totalRegs}, Total injection sites: ${totalSites}`);
-    if (totalRegs === 0) {
-      console.warn('No DI registrations found. Check if your .cs files have standard services.Add* calls.');
-    }
-
-    // Group into services
-    const servicesByName = new Map<string, Service>();
-    for (const reg of registrations) {
-      let service = servicesByName.get(reg.serviceType) as Service;
-      if (!service) {
-        service = { name: reg.serviceType, registrations: [], hasConflicts: false, injectionSites: [] };
-        servicesByName.set(reg.serviceType, service);
-      }
-      service.registrations.push(reg);
-      // Basic conflict: multiple impls for same service in same lifetime
-      const lifetimeImpls = service.registrations
-        .filter(r => r.lifetime === reg.lifetime)
-        .map(r => r.implementationType);
-      if (new Set(lifetimeImpls).size > 1) {
-        service.hasConflicts = true;
+        console.error(`Error finding projects in folder ${folderPath}:`, error);
       }
     }
 
-    // Associate injection sites with services
-    for (const site of allInjectionSites) {
-      const matchingService = Array.from(servicesByName.values()).find(s => s.name === site.serviceType);
-      if (matchingService) {
-        matchingService.injectionSites.push(site);
+    if (allProjectDirs.length === 0) {
+      console.warn('No .NET projects found in workspace folders.');
+    }
+
+    const projectDI: ProjectDI[] = [];
+    const totalProjects = allProjectDirs.length;
+    let processedProjects = 0;
+    for (const projectDir of allProjectDirs) {
+      const projectName = path.basename(projectDir);
+      progress?.report({ increment: (processedProjects / totalProjects) * 100, message: `Parsing project ${projectName} with Roslyn analyzer` });
+      console.log(`Parsing project ${projectName} with Roslyn analyzer`);
+      const projectData = await parseProject(projectDir);
+      projectDI.push(projectData);
+      processedProjects++;
+      const regsCount = projectData
+        .serviceGroups
+        .reduce(
+          (sum: number, g: ServiceGroup) => sum + g.services.reduce(
+            (s: number, svc: Service) => s + svc.registrations.length, 0
+          ),
+          0);
+      const sitesCount = projectData.serviceGroups.reduce((sum: number, g: ServiceGroup) => sum + g.services.reduce((s: number, svc: Service) => s + svc.injectionSites.length, 0), 0);
+
+      console.log(`Project ${projectName}: ${regsCount} registrations, ${sitesCount} sites, ${projectData.cycles.length} cycles`);
+      if (regsCount === 0) {
+        console.warn(`No DI registrations found in project ${projectName}.`);
       }
     }
 
-    // Group by lifetime, creating lifetime-specific service views to avoid duplication
-    this.serviceGroups = [];
-    for (const lifetime of CONSTANTS.LIFETIMES) {
-      const lifeTimeServices: Service[] = [];
-      for (const service of Array.from(servicesByName.values())) {
-        const lifetimeRegs = service.registrations.filter(r => r.lifetime === lifetime);
-        if (lifetimeRegs.length > 0) {
-          const lifeTimeService: Service = {
-            ...service,
-            registrations: lifetimeRegs,
-            hasConflicts: new Set(lifetimeRegs.map(r => r.implementationType)).size > 1
-          };
-          lifeTimeServices.push(lifeTimeService);
-        }
-      }
-      if (lifeTimeServices.length > 0) {
-        this.serviceGroups.push({
-          lifetime,
-          services: lifeTimeServices,
-          color: this.getLifetimeColor(lifetime)
-        });
-      }
+    const totalRegs = projectDI.reduce((acc: number, p: ProjectDI) => acc + p.serviceGroups.reduce((sum: number, g: ServiceGroup) => sum + g.services.reduce((s: number, svc: Service) => s + svc.registrations.length, 0), 0), 0);
+
+    const totalSites = projectDI.reduce((acc: number, p: ProjectDI) => acc + p.serviceGroups.reduce((sum: number, g: ServiceGroup) => sum + g.services.reduce((s: number, svc: Service) => s + svc.injectionSites.length, 0), 0), 0);
+
+    progress?.report({ increment: 100, message: `Scan complete: ${projectDI.length} projects, ${totalRegs} registrations, ${totalSites} sites` });
+    console.log(`Total projects parsed: ${projectDI.length}, Total registrations: ${totalRegs}, Total injection sites: ${totalSites}`);
+    if (projectDI.length === 0) {
+      console.warn('No .NET projects found in workspace.');
     }
 
-    this.cache.set('default', this.serviceGroups);
-    // Cache cleared only when needed; no immediate clear
+    this.projectDI = projectDI;
+
+    // Populate allServices
+    this.allServices = [];
+    for (const project of projectDI) {
+      for (const group of project.serviceGroups) {
+        this.allServices.push(...group.services);
+      }
+    }
   }
 
   private getLifetimeColor(lifetime: Lifetime): string {
@@ -151,12 +138,66 @@ export class ServiceProvider {
     }
   }
 
+  getProjectDI(): ProjectDI[] {
+    return this.projectDI.filter(project =>
+      project.serviceGroups.some(group =>
+        group.services.some(service => service.registrations.length > 0)
+      )
+    );
+  }
+
+  invalidateFile(filePath: string): void {
+    this.dirty = true;
+    this.allServices = [];
+    console.log(`Invalidated cache due to change in ${filePath}`);
+  }
+
   getServiceGroups(): ServiceGroup[] {
-    return this.serviceGroups;
+    if (this.projectDI.length === 0) {
+      // Test mode: lazy loading with counts
+      const groups: ServiceGroup[] = [];
+      for (const lifetime of LIFETIMES) {
+        const count = this.allServices.filter(s => s.registrations.some(r => r.lifetime === lifetime)).length;
+        if (count > 0) {
+          groups.push({
+            lifetime,
+            services: [],
+            color: this.getLifetimeColor(lifetime),
+            count
+          });
+        }
+      }
+      return groups;
+    } else {
+      // Normal mode
+      const allGroups: ServiceGroup[] = [];
+      for (const project of this.projectDI) {
+        for (const group of project.serviceGroups) {
+          allGroups.push({
+            ...group,
+            count: group.services.length
+          });
+        }
+      }
+      return allGroups;
+    }
+  }
+
+  getServicesForLifetime(lifetime: Lifetime): Service[] {
+    return this.allServices.filter(s => s.registrations.some(r => r.lifetime === lifetime));
+  }
+
+  // Removed; conflicts now handled in parseProject and collectRegistrations using graph
+
+  getAllServices(): Service[] {
+    return this.allServices;
   }
 
   async refresh(): Promise<void> {
-    await this.collectRegistrations();
+    if (this.dirty) {
+      await this.collectRegistrations();
+    }
+    this.dirty = false;
   }
 }
 

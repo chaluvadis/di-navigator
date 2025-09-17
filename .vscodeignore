@@ -12,3 +12,16 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+**/bin/
+**/obj/
+**/testdata/
+tools/**
+.github/**
+.vscode-test-web/**
+out/**
+.vscode-test/**
+node_modules/**
+di-navigator.sln
+readme.md
+package-lock.json
+analysis.md
