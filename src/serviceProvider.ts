@@ -15,6 +15,8 @@ export class ServiceProvider {
   private allServices: Service[] = [];
   private context: ExtensionContext | undefined;
   private dirty = false;
+  private allProjectDirs: string[] = [];
+  private dirtyProjects: Set<string> = new Set();
 
   setContext(context: ExtensionContext): void {
     this.context = context;
@@ -33,6 +35,8 @@ export class ServiceProvider {
     this.projectDI = [];
     this.allServices = [];
     this.dirty = false;
+    this.allProjectDirs = [];
+    this.dirtyProjects.clear();
   }
 
   // Removed legacy parseFile; now using parseProject
@@ -83,46 +87,62 @@ export class ServiceProvider {
       console.warn('No .NET projects found in workspace folders.');
     }
 
-    const projectDI: ProjectDI[] = [];
-    const totalProjects = allProjectDirs.length;
+    this.allProjectDirs = allProjectDirs;
+
+    let toParse = allProjectDirs;
+    if (this.dirtyProjects.size > 0) {
+      toParse = allProjectDirs.filter(dir => this.dirtyProjects.has(dir));
+    }
+    if (this.dirty) {
+      toParse = allProjectDirs;
+    }
+    if (toParse.length === 0) {
+      return;
+    }
+
+    const totalProjects = toParse.length;
     let processedProjects = 0;
-    for (const projectDir of allProjectDirs) {
+    for (const projectDir of toParse) {
       const projectName = path.basename(projectDir);
-      progress?.report({ increment: (processedProjects / totalProjects) * 100, message: `Parsing project ${projectName} with Roslyn analyzer` });
-      console.log(`Parsing project ${projectName} with Roslyn analyzer`);
+      const message = this.dirty ? `Parsing project ${projectName}` : `Updating project ${projectName}`;
+      progress?.report({ increment: (processedProjects / totalProjects) * 100, message });
+      console.log(message);
       const projectData = await parseProject(projectDir);
-      projectDI.push(projectData);
+      const index = this.projectDI.findIndex(p => p.projectPath === projectDir);
+      if (this.dirty || index === -1) {
+        if (index > -1) {
+          this.projectDI[index] = projectData;
+        } else {
+          this.projectDI.push(projectData);
+        }
+      } else {
+        this.projectDI[index] = projectData;
+      }
       processedProjects++;
-      const regsCount = projectData
-        .serviceGroups
-        .reduce(
-          (sum: number, g: ServiceGroup) => sum + g.services.reduce(
-            (s: number, svc: Service) => s + svc.registrations.length, 0
-          ),
-          0);
-      const sitesCount = projectData.serviceGroups.reduce((sum: number, g: ServiceGroup) => sum + g.services.reduce((s: number, svc: Service) => s + svc.injectionSites.length, 0), 0);
+      const regsCount = projectData.serviceGroups.reduce((sum, g) => sum + g.services.reduce((s, svc) => s + svc.registrations.length, 0), 0);
+      const sitesCount = projectData.serviceGroups.reduce((sum, g) => sum + g.services.reduce((s, svc) => s + svc.injectionSites.length, 0), 0);
 
       console.log(`Project ${projectName}: ${regsCount} registrations, ${sitesCount} sites, ${projectData.cycles.length} cycles`);
       if (regsCount === 0) {
         console.warn(`No DI registrations found in project ${projectName}.`);
       }
     }
+    this.dirtyProjects.clear();
+    this.dirty = false;
 
-    const totalRegs = projectDI.reduce((acc: number, p: ProjectDI) => acc + p.serviceGroups.reduce((sum: number, g: ServiceGroup) => sum + g.services.reduce((s: number, svc: Service) => s + svc.registrations.length, 0), 0), 0);
+    const totalRegs = this.projectDI.reduce((acc, p) => acc + p.serviceGroups.reduce((sum, g) => sum + g.services.reduce((s, svc) => s + svc.registrations.length, 0), 0), 0);
 
-    const totalSites = projectDI.reduce((acc: number, p: ProjectDI) => acc + p.serviceGroups.reduce((sum: number, g: ServiceGroup) => sum + g.services.reduce((s: number, svc: Service) => s + svc.injectionSites.length, 0), 0), 0);
+    const totalSites = this.projectDI.reduce((acc, p) => acc + p.serviceGroups.reduce((sum, g) => sum + g.services.reduce((s, svc) => s + svc.injectionSites.length, 0), 0), 0);
 
-    progress?.report({ increment: 100, message: `Scan complete: ${projectDI.length} projects, ${totalRegs} registrations, ${totalSites} sites` });
-    console.log(`Total projects parsed: ${projectDI.length}, Total registrations: ${totalRegs}, Total injection sites: ${totalSites}`);
-    if (projectDI.length === 0) {
+    progress?.report({ increment: 100, message: `Scan complete: ${this.projectDI.length} projects, ${totalRegs} registrations, ${totalSites} sites` });
+    console.log(`Total projects parsed: ${this.projectDI.length}, Total registrations: ${totalRegs}, Total injection sites: ${totalSites}`);
+    if (this.projectDI.length === 0) {
       console.warn('No .NET projects found in workspace.');
     }
 
-    this.projectDI = projectDI;
-
     // Populate allServices
     this.allServices = [];
-    for (const project of projectDI) {
+    for (const project of this.projectDI) {
       for (const group of project.serviceGroups) {
         this.allServices.push(...group.services);
       }
@@ -147,9 +167,20 @@ export class ServiceProvider {
   }
 
   invalidateFile(filePath: string): void {
-    this.dirty = true;
+    let invalidatedProject = false;
+    for (const projDir of this.allProjectDirs) {
+      const rel = path.relative(projDir, filePath);
+      if (rel !== '' && !rel.startsWith('..')) {
+        this.dirtyProjects.add(projDir);
+        invalidatedProject = true;
+        break;
+      }
+    }
+    if (!invalidatedProject) {
+      this.dirty = true;
+    }
     this.allServices = [];
-    console.log(`Invalidated cache due to change in ${filePath}`);
+    console.log(`Invalidated ${invalidatedProject ? 'project' : 'full cache'} due to change in ${filePath}`);
   }
 
   getServiceGroups(): ServiceGroup[] {
@@ -194,7 +225,7 @@ export class ServiceProvider {
   }
 
   async refresh(): Promise<void> {
-    if (this.dirty) {
+    if (this.dirtyProjects.size > 0 || this.dirty) {
       await this.collectRegistrations();
     }
     this.dirty = false;

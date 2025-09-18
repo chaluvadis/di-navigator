@@ -39,6 +39,8 @@ export interface ProjectDI {
     serviceGroups: ServiceGroup[];
     cycles: string[];
     dependencyGraph: Record<string, string[]>;
+    parseStatus: 'success' | 'partial' | 'failed';
+    errorDetails?: string[];
 }
 
 export interface InjectionSite {

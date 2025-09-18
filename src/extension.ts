@@ -1,7 +1,7 @@
 import {
   ExtensionContext,
   workspace, window,
-  commands, ProgressLocation
+  commands, ProgressLocation, Uri
 } from 'vscode';
 import { diNavigatorProvider } from './treeView';
 import { serviceProvider } from './serviceProvider';
@@ -12,7 +12,7 @@ import {
   VALID_WORKSPACE_CONTEXT
 } from './const';
 
-const debounce = (func: Function, delay: number) => {
+export const debounce = (func: Function, delay: number) => {
   let timeoutId: NodeJS.Timeout;
   return (...args: any[]) => {
     clearTimeout(timeoutId);
@@ -82,11 +82,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   const debouncedUpdate = debounce(updateWorkspaceContext, 500); // 500ms debounce
 
+  const debouncedInvalidate = debounce((uri: Uri) => {
+    serviceProvider.invalidateFile(uri.fsPath);
+    serviceProvider.refresh().then(() => {
+      diNavigatorProvider.refresh();
+    }).catch((err) => {
+      console.error('Error during selective refresh:', err);
+    });
+  }, 500);
+
   NET_FILE_PATTERNS.forEach(pattern => {
     const watcher = workspace.createFileSystemWatcher(pattern);
-    watcher.onDidCreate(debouncedUpdate);
-    watcher.onDidDelete(debouncedUpdate);
-    watcher.onDidChange(debouncedUpdate);
+    watcher.onDidCreate(debouncedInvalidate);
+    watcher.onDidDelete(debouncedInvalidate);
+    watcher.onDidChange(debouncedInvalidate);
     context.subscriptions.push(watcher);
   });
 
@@ -99,3 +108,4 @@ export function deactivate() {
   // Refresh to clear the tree view
   diNavigatorProvider.refresh();
 }
+

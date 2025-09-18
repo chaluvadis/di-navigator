@@ -17,6 +17,13 @@
   "engines": {
     "vscode": "^1.104.0"
   },
+  "files": [
+    "roslyn-di-analyzer-bin/**",
+    "dist/**",
+    "src/**",
+    "package.json",
+    "README.md"
+  ],
   "categories": [
     "Other",
     "Programming Languages",
@@ -80,6 +87,11 @@
         "items": {
           "type": "string"
         }
+      },
+      "diNavigator.toolPath": {
+        "type": "string",
+        "default": "",
+        "description": "Custom path to the roslyn-di-analyzer.dll tool. Leave empty to use bundled or local build."
       }
     }
   },
@@ -89,7 +101,7 @@
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "package": "npm run check-types && npm run lint && dotnet build tools/roslyn-di-analyzer/roslyn-di-analyzer.csproj -c Debug && if not exist \"dist\\tools\\roslyn-di-analyzer\" mkdir \"dist\\tools\\roslyn-di-analyzer\" && copy /Y \"tools\\roslyn-di-analyzer\\bin\\Debug\\net8.0\\roslyn-di-analyzer.dll\" \"dist\\tools\\roslyn-di-analyzer\\\" && node esbuild.js --production",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",

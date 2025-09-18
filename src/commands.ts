@@ -1,7 +1,9 @@
 import {
   commands, workspace, window, ExtensionContext,
-  Uri, Range, Position, WorkspaceEdit, FileSystemError
+  Uri, Range, Position, WorkspaceEdit, FileSystemError,
+  SaveDialogOptions
 } from 'vscode';
+import * as path from 'path';
 import { Service, InjectionSite, Registration, PickItem } from './models';
 import { serviceProvider } from './serviceProvider';
 import { diNavigatorProvider } from './treeView';
@@ -132,11 +134,13 @@ export function registerCommands(context: ExtensionContext) {
       window.showInformationMessage('No DI services found.');
       return;
     }
-    const selected = await window.showQuickPick(services.map(s => ({
-      label: s.name,
-      detail: `${s.registrations.length} registrations`,
-      service: s
-    } as any)), {
+    const selected = await window.showQuickPick(services
+      .map(s => ({
+        label: s.name,
+        detail: `${s.registrations.length} registrations`,
+        service: s
+      } as any))
+      .sort((a, b) => a.label.localeCompare(b.label)), {
       placeHolder: 'Select a service to navigate to'
     });
     if (!selected) {
@@ -168,12 +172,13 @@ export function registerCommands(context: ExtensionContext) {
     if (service.registrations.length === 1) {
       reg = service.registrations[0];
     } else {
-      const pickItems: PickItem[] = service.registrations.map(r => ({
-        label: `${workspace.asRelativePath(Uri.file(r.filePath))}:${r.lineNumber}`,
-        detail: r.filePath,
-        registration: r
-      } as PickItem));
-
+      const pickItems: PickItem[] = service.registrations
+        .map(r => ({
+          label: `${workspace.asRelativePath(Uri.file(r.filePath))}:${r.lineNumber}`,
+          detail: r.filePath,
+          registration: r
+        } as PickItem))
+        .sort((a, b) => (a.detail || '').localeCompare(b.detail || ''));
       const selected = await window.showQuickPick<PickItem>(pickItems, {
         placeHolder: 'Select implementation to navigate to',
         canPickMany: false
@@ -233,6 +238,7 @@ export function registerCommands(context: ExtensionContext) {
         }
       }
     }
+    conflicts.sort((a, b) => a.label.localeCompare(b.label));
 
     if (conflicts.length === 0) {
       window.showInformationMessage('No conflicts found in DI registrations.');
@@ -293,6 +299,14 @@ export function registerCommands(context: ExtensionContext) {
       if (choice) {
         window.showInformationMessage(`Preferred impl: ${choice}. Manually remove others.`);
       }
+    } else if (selected.conflict.type === 'MixedLifetimes') {
+      window.showInformationMessage(`Mixed lifetimes in ${selected.service.name}: Standardize manually to avoid captive dependencies.`);
+    } else if (selected.conflict.type === 'UnregisteredInjection') {
+      const site = selected.service.injectionSites[0];
+      if (site) {
+        await validateAndOpen(site.filePath, site.lineNumber);
+        window.showInformationMessage('Navigated to injection site. Add a registration for this service.');
+      }
     } else {
       window.showInformationMessage(`Conflict "${selected.conflict.type}": ${selected.conflict.details}. Manual resolution recommended.`);
     }
@@ -316,6 +330,62 @@ export function registerCommands(context: ExtensionContext) {
     gotoSiteDisposable,
     resolveConflictsDisposable
   );
+
+  // Filter tree command
+  /**
+   * Filters the tree view by service name or type.
+   */
+  const filterTreeDisposable = commands.registerCommand('di-navigator.filterTree', async () => {
+    const filter = await window.showInputBox({
+      placeHolder: 'Filter services by name or type',
+      validateInput: (value) => value.trim().length > 0 ? null : 'Enter a filter term'
+    });
+    if (!filter) { return; }
+
+    const services = serviceProvider.getAllServices().filter(s =>
+      s.name.toLowerCase().includes(filter.toLowerCase())
+    );
+    if (services.length === 0) {
+      window.showInformationMessage('No services match the filter.');
+      return;
+    }
+    const selected = await window.showQuickPick(services.map(s => ({
+      label: s.name,
+      detail: `${s.registrations.length} registrations, ${s.injectionSites.length} sites`,
+      service: s
+    })).sort((a, b) => a.label.localeCompare(b.label)), { placeHolder: `Filtered services matching "${filter}"` });
+    if (selected) {
+      commands.executeCommand(COMMAND_GO_TO_IMPL, selected.service);
+    }
+  });
+
+  context.subscriptions.push(filterTreeDisposable);
+
+  // Export services command
+  /**
+   * Exports DI data to JSON file.
+   */
+  const exportServicesDisposable = commands.registerCommand('di-navigator.exportServices', async () => {
+    const projects = serviceProvider.getProjectDI();
+    if (projects.length === 0) {
+      window.showInformationMessage('No DI data to export.');
+      return;
+    }
+    const data = JSON.stringify(projects, null, 2);
+    const options: SaveDialogOptions = {
+      defaultUri: Uri.file(path.join(workspace.workspaceFolders?.[0]?.uri.fsPath || '', 'di-navigator-export.json')),
+      filters: {
+        'JSON': ['json']
+      }
+    };
+    const uri = await window.showSaveDialog(options);
+    if (uri) {
+      await workspace.fs.writeFile(uri, Buffer.from(data, 'utf8'));
+      window.showInformationMessage(`Exported DI data to ${uri.fsPath}`);
+    }
+  });
+
+  context.subscriptions.push(exportServicesDisposable);
 
   console.log('All DI Navigator commands registered successfully.');
 }
