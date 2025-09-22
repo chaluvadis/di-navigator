@@ -16,6 +16,7 @@ vsc-extension-quickstart.md
 **/obj/
 **/testdata/
 tools/**
+!dist/tools/
 .github/**
 .vscode-test-web/**
 out/**
@@ -24,4 +25,5 @@ node_modules/**
 di-navigator.sln
 readme.md
 package-lock.json
-analysis.md
+di-navigator-analysis.md
+test-project

@@ -17,13 +17,6 @@
   "engines": {
     "vscode": "^1.104.0"
   },
-  "files": [
-    "roslyn-di-analyzer-bin/**",
-    "dist/**",
-    "src/**",
-    "package.json",
-    "README.md"
-  ],
   "categories": [
     "Other",
     "Programming Languages",
@@ -71,27 +64,38 @@
           "when": "diNavigator:validWorkspace"
         }
       ]
-    }
-  },
-  "configuration": {
-    "title": "DI Navigator",
-    "properties": {
-      "diNavigator.excludeFolders": {
-        "type": "array",
-        "default": [
-          "**/bin/**",
-          "**/obj/**",
-          "**/Properties/**"
-        ],
-        "description": "Glob patterns for folders to exclude from file scanning (e.g., build artifacts).",
-        "items": {
-          "type": "string"
+    },
+    "configuration": {
+      "title": "DI Navigator",
+      "properties": {
+        "diNavigator.excludeFolders": {
+          "type": "array",
+          "default": [
+            "**/bin/**",
+            "**/obj/**",
+            "**/Properties/**"
+          ],
+          "description": "Glob patterns for folders to exclude from file scanning (e.g., build artifacts).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diNavigator.toolPath": {
+          "type": "string",
+          "default": "",
+          "description": "Toolpath for DI analyzer (deprecated - now uses JavaScript parsing)."
+        },
+        "diNavigator.diContainer": {
+          "type": "string",
+          "enum": [
+            "Microsoft.Extensions.DependencyInjection",
+            "Autofac",
+            "Castle.Windsor",
+            "Unity"
+          ],
+          "default": "Microsoft.Extensions.DependencyInjection",
+          "description": "DI Container to analyze."
         }
-      },
-      "diNavigator.toolPath": {
-        "type": "string",
-        "default": "",
-        "description": "Custom path to the roslyn-di-analyzer.dll tool. Leave empty to use bundled or local build."
       }
     }
   },
@@ -101,27 +105,29 @@
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && dotnet build tools/roslyn-di-analyzer/roslyn-di-analyzer.csproj -c Debug && if not exist \"dist\\tools\\roslyn-di-analyzer\" mkdir \"dist\\tools\\roslyn-di-analyzer\" && copy /Y \"tools\\roslyn-di-analyzer\\bin\\Debug\\net8.0\\roslyn-di-analyzer.dll\" \"dist\\tools\\roslyn-di-analyzer\\\" && node esbuild.js --production",
+    "package": "npm run check-types && npm run lint",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "node --no-warnings .vscode-test.mjs"
+    "test": "node --no-warnings .vscode-test.mjs",
+    "dpackage": "npm run compile && vsce package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "24.5.1",
+    "@types/node": "24.5.2",
     "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.104.0",
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
-    "esbuild": "^0.25.9",
+    "esbuild": "^0.25.10",
     "eslint": "^9.35.0",
     "npm-run-all": "^4.1.5",
     "sinon": "^21.0.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@vscode/vsce": "^3.6.0"
   }
 }

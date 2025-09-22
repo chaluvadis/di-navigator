@@ -1,4 +1,5 @@
-import { QuickPickItem, Uri } from "vscode";
+
+import { TreeItem } from 'vscode';
 
 export const enum Lifetime {
     Singleton = 'Singleton',
@@ -66,20 +67,9 @@ export const enum Colors {
     Others = '#808080'
 }
 
-export interface PickItem extends QuickPickItem {
-    registration: Registration;
-}
-
-export interface ProjectItem extends QuickPickItem {
-    uri: Uri;
-}
-
 export interface ConflictItem {
     type: string;
     details: string;
 }
 
-export interface TypeArgs {
-    serviceType: string;
-    implType: string;
-}
+export type DiNavigatorItem = TreeItem | ProjectDI | ServiceGroup | Service | InjectionSite | ConflictItem;
