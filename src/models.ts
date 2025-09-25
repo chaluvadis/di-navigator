@@ -54,3 +54,10 @@ export interface Conflict {
     type: string; // 'Duplicate', 'MissingImpl', etc.
     details: string;
 }
+
+export interface WorkspaceAnalysis {
+    projects: ProjectDI[];
+    totalServices: number;
+    totalProjects: number;
+    analysisTimestamp: Date;
+}

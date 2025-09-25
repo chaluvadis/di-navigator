@@ -1,23 +1,29 @@
 import * as vscode from 'vscode';
 import { Logger } from './Logger';
-import { ProjectDI } from '../models';
+import { WorkspaceAnalysis } from '../models';
 
-/**
- * Tree View Manager Service
- *
- * Manages the VSCode tree view for displaying dependency injection analysis results.
- * Handles tree data provider registration, data updates, and user interactions.
- */
 export class TreeViewManager {
     private readonly context: vscode.ExtensionContext;
     private readonly logger: Logger;
     private treeDataProvider: DINavigatorTreeProvider | null = null;
     private treeView: vscode.TreeView<DINavigatorTreeItem> | null = null;
-    private currentAnalysisData: ProjectDI | null = null;
+    private currentAnalysisData: WorkspaceAnalysis | null = null;
 
     constructor(context: vscode.ExtensionContext, logger: Logger) {
         this.context = context;
         this.logger = logger;
+    }
+    public getServiceIcon(lifetime: string): string {
+        switch (lifetime) {
+            case 'Singleton':
+                return 'symbol-class';
+            case 'Scoped':
+                return 'symbol-variable';
+            case 'Transient':
+                return 'symbol-method';
+            default:
+                return 'symbol-misc';
+        }
     }
 
     /**
@@ -27,7 +33,7 @@ export class TreeViewManager {
         this.logger.info('Initializing TreeViewManager...');
 
         // Create tree data provider
-        this.treeDataProvider = new DINavigatorTreeProvider(this.logger);
+        this.treeDataProvider = new DINavigatorTreeProvider(this.logger, this);
         // Register tree view
         this.treeView = vscode.window.createTreeView('diNavigator', {
             treeDataProvider: this.treeDataProvider,
@@ -53,26 +59,22 @@ export class TreeViewManager {
         this.logger.info('TreeViewManager initialized successfully');
     }
 
-    /**
-      * Update the analysis data displayed in the tree view
-      * @param analysisData New analysis data
-      */
-    updateAnalysisData(analysisData: ProjectDI): void {
+    updateAnalysisData(analysisData: WorkspaceAnalysis): void {
         this.logger.info('TreeViewManager.updateAnalysisData called', 'TreeViewManager', {
             hasData: !!analysisData,
-            serviceGroupsCount: analysisData?.serviceGroups?.length || 0,
-            totalServices: analysisData?.serviceGroups?.reduce((acc, group) => acc + group.services.length, 0) || 0
+            projectsCount: analysisData?.projects?.length || 0,
+            totalServices: analysisData?.totalServices || 0
         });
 
         this.currentAnalysisData = analysisData;
         this.treeDataProvider?.updateAnalysisData(analysisData);
 
-        const serviceCount = analysisData.serviceGroups.reduce((acc, group) => acc + group.services.length, 0);
-        const groupCount = analysisData.serviceGroups.length;
+        // Log final data structure with service symbols
+        this.logFinalDataStructure(analysisData);
 
         this.logger.info('Tree view data updated', 'TreeViewManager', {
-            serviceCount,
-            groupCount
+            serviceCount: analysisData.totalServices,
+            projectCount: analysisData.totalProjects
         });
     }
 
@@ -80,8 +82,51 @@ export class TreeViewManager {
      * Get the current analysis data
      * @returns Current analysis data or null
      */
-    getCurrentAnalysisData(): ProjectDI | null {
+    getCurrentAnalysisData(): WorkspaceAnalysis | null {
         return this.currentAnalysisData;
+    }
+
+    /**
+     * Log the final data structure with service symbols
+     * @param analysisData Analysis data to log
+     */
+    private logFinalDataStructure(analysisData: WorkspaceAnalysis): void {
+        this.logger.info('=== Final Data Structure with Service Symbols ===', 'TreeViewManager');
+
+        if (!analysisData || !analysisData.projects) {
+            this.logger.info('No analysis data available', 'TreeViewManager');
+            return;
+        }
+
+        analysisData.projects.forEach((project, projectIndex) => {
+            this.logger.info(`Project ${projectIndex + 1}: ${project.projectName}`, 'TreeViewManager', {
+                path: project.projectPath,
+                totalServices: project.serviceGroups.reduce((acc, group) => acc + group.services.length, 0)
+            });
+
+            project.serviceGroups.forEach((group) => {
+                const symbol = this.getServiceIcon(group.lifetime);
+                this.logger.info(`  Group: ${group.lifetime} (${group.services.length} services) [${symbol}]`, 'TreeViewManager');
+
+                group.services.forEach((service) => {
+                    const lifetime = service.registrations[0]?.lifetime || 'Others';
+                    const serviceSymbol = this.getServiceIcon(lifetime);
+                    const hasConflicts = service.hasConflicts ? ' [CONFLICTS]' : '';
+                    const registrationCount = service.registrations.length;
+                    const injectionCount = service.injectionSites.length;
+
+                    this.logger.info(`    Service: ${service.name}${hasConflicts} [${serviceSymbol}]`, 'TreeViewManager', {
+                        registrations: registrationCount,
+                        injections: injectionCount,
+                        lifetime: lifetime
+                    });
+                });
+            });
+        });
+
+        this.logger.info(`Total Projects: ${analysisData.totalProjects}`, 'TreeViewManager');
+        this.logger.info(`Total Services: ${analysisData.totalServices}`, 'TreeViewManager');
+        this.logger.info('=== End Data Structure ===', 'TreeViewManager');
     }
 
     /**
@@ -118,6 +163,9 @@ export class TreeViewManager {
 
         // Handle different types of tree items
         switch (selectedItem.itemType) {
+            case 'project':
+                this.handleProjectSelection(selectedItem);
+                break;
             case 'service':
                 this.handleServiceSelection(selectedItem);
                 break;
@@ -130,6 +178,30 @@ export class TreeViewManager {
             default:
                 this.logger.debug(`Unhandled selection type: ${selectedItem.itemType}`, 'TreeViewManager');
         }
+    }
+
+    /**
+     * Handle project selection
+     * @param item Selected project item
+     */
+    private handleProjectSelection(item: DINavigatorTreeItem): void {
+        if (!item.projectData) {
+            this.logger.warn('No project data available for selected item', 'TreeViewManager');
+            return;
+        }
+
+        const project = item.projectData;
+        const totalServices = project.serviceGroups.reduce((acc: number, group: any) => acc + group.services.length, 0);
+        const groupCount = project.serviceGroups.length;
+
+        this.logger.debug(`Project selected: ${project.projectName}`, 'TreeViewManager', {
+            totalServices,
+            groupCount,
+            projectPath: project.projectPath
+        });
+
+        // Show project summary in output channel
+        this.showProjectSummary(project);
     }
 
     /**
@@ -265,6 +337,31 @@ ${injectionSites || '  None found'}
     }
 
     /**
+     * Show project summary in output channel
+     * @param project Project data
+     */
+    private showProjectSummary(project: any): void {
+        const channel = vscode.window.createOutputChannel('DI Navigator');
+        channel.clear();
+        channel.appendLine(`=== Project Summary: ${project.projectName} ===`);
+        channel.appendLine(`Path: ${project.projectPath}`);
+
+        const totalServices = project.serviceGroups.reduce((acc: number, group: any) => acc + group.services.length, 0);
+        const groupCount = project.serviceGroups.length;
+
+        channel.appendLine(`Total Services: ${totalServices}`);
+        channel.appendLine(`Service Groups: ${groupCount}`);
+
+        project.serviceGroups.forEach((group: any) => {
+            const serviceCount = group.services.length;
+            channel.appendLine(`  ${group.lifetime}: ${serviceCount} services`);
+        });
+
+        channel.appendLine(`====================================`);
+        channel.show();
+    }
+
+    /**
      * Show service summary in output channel
      * @param service Service data
      */
@@ -369,12 +466,14 @@ ${injectionSites || '  None found'}
  */
 class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTreeItem> {
     private readonly logger: Logger;
-    private analysisData: ProjectDI | null = null;
+    private readonly treeViewManager: TreeViewManager;
+    private analysisData: WorkspaceAnalysis | null = null;
     private onDidChangeTreeDataEmitter = new vscode.EventEmitter<DINavigatorTreeItem | undefined | null>();
     public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
-    constructor(logger: Logger) {
+    constructor(logger: Logger, treeViewManager: TreeViewManager) {
         this.logger = logger;
+        this.treeViewManager = treeViewManager;
     }
 
     /**
@@ -398,6 +497,8 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
         }
 
         switch (element.itemType) {
+            case 'project':
+                return Promise.resolve(this.getServiceGroups(element));
             case 'group':
                 return Promise.resolve(this.getServiceItems(element));
             case 'service':
@@ -408,13 +509,13 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
     }
 
     /**
-      * Get root level items (service groups)
-      * @returns Array of service group items
+      * Get root level items (projects)
+      * @returns Array of project items
       */
     private getRootItems(): DINavigatorTreeItem[] {
         this.logger.debug('getRootItems called', 'DINavigatorTreeProvider', {
             hasAnalysisData: !!this.analysisData,
-            serviceGroupsCount: this.analysisData?.serviceGroups?.length || 0
+            projectsCount: this.analysisData?.projects?.length || 0
         });
 
         if (!this.analysisData) {
@@ -427,11 +528,44 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
             )];
         }
 
-        const items = this.analysisData.serviceGroups.map(group => {
+        const items = this.analysisData.projects.map(project => {
+            const totalServices = project.serviceGroups.reduce((acc: number, group: any) => acc + group.services.length, 0);
+            const label = `${project.projectName} (${totalServices} services)`;
+
+            this.logger.debug(`Creating project item: ${label}`, 'DINavigatorTreeProvider', {
+                projectName: project.projectName,
+                totalServices
+            });
+
+            return new DINavigatorTreeItem(
+                label,
+                `Project: ${project.projectPath}`,
+                'project',
+                totalServices > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                project
+            );
+        });
+
+        this.logger.debug(`Returning ${items.length} root items`, 'DINavigatorTreeProvider');
+        return items;
+    }
+
+    /**
+     * Get service groups for a project
+     * @param projectItem Project tree item
+     * @returns Array of service group items
+     */
+    private getServiceGroups(projectItem: DINavigatorTreeItem): DINavigatorTreeItem[] {
+        const project = projectItem.projectData;
+        if (!project) {
+            return [];
+        }
+
+        return project.serviceGroups.map((group: any) => {
             const serviceCount = group.services.length;
             const label = `${group.lifetime} Services (${serviceCount})`;
 
-            this.logger.debug(`Creating group item: ${label}`, 'DINavigatorTreeProvider', {
+            this.logger.debug(`Creating service group item: ${label}`, 'DINavigatorTreeProvider', {
                 lifetime: group.lifetime,
                 serviceCount
             });
@@ -441,12 +575,10 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                 `Service group with ${serviceCount} services`,
                 'group',
                 serviceCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                undefined,
                 group
             );
         });
-
-        this.logger.debug(`Returning ${items.length} root items`, 'DINavigatorTreeProvider');
-        return items;
     }
 
     /**
@@ -474,12 +606,14 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                 description += `${injectionCount} injection${injectionCount > 1 ? 's' : ''}`;
             }
 
-            const iconPath = hasConflicts ? 'warning' : 'service';
             const collapsibleState = (registrationCount > 0 || injectionCount > 0)
                 ? vscode.TreeItemCollapsibleState.Collapsed
                 : vscode.TreeItemCollapsibleState.None;
 
-            return new DINavigatorTreeItem(
+            const lifetime = service.registrations[0]?.lifetime || 'Others';
+            const icon = this.treeViewManager.getServiceIcon(lifetime);
+
+            const treeItem = new DINavigatorTreeItem(
                 service.name,
                 description,
                 'service',
@@ -487,6 +621,17 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                 undefined,
                 service
             );
+
+            treeItem.iconPath = new vscode.ThemeIcon(icon);
+
+            // Log the service with its assigned symbol
+            this.logger.debug(`Service created: ${service.name} [${icon}] (${lifetime})`, 'DINavigatorTreeProvider', {
+                registrations: registrationCount,
+                injections: injectionCount,
+                hasConflicts
+            });
+
+            return treeItem;
         });
     }
 
@@ -544,7 +689,7 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
      * Update analysis data
      * @param data New analysis data
      */
-    updateAnalysisData(data: ProjectDI): void {
+    updateAnalysisData(data: WorkspaceAnalysis): void {
         this.analysisData = data;
         this.refresh();
     }
@@ -554,7 +699,8 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
  * Tree Item for DI Navigator
  */
 export class DINavigatorTreeItem extends vscode.TreeItem {
-    public readonly itemType: 'info' | 'group' | 'service' | 'registration' | 'injection-site';
+    public readonly itemType: 'info' | 'project' | 'group' | 'service' | 'registration' | 'injection-site';
+    public readonly projectData?: any;
     public readonly groupData?: any;
     public readonly serviceData?: any;
     public readonly registrationData?: any;
@@ -565,6 +711,7 @@ export class DINavigatorTreeItem extends vscode.TreeItem {
         tooltip: string,
         itemType: DINavigatorTreeItem['itemType'],
         collapsibleState: vscode.TreeItemCollapsibleState,
+        projectData?: any,
         groupData?: any,
         serviceData?: any,
         registrationData?: any,
@@ -574,6 +721,7 @@ export class DINavigatorTreeItem extends vscode.TreeItem {
 
         this.itemType = itemType;
         this.tooltip = tooltip;
+        this.projectData = projectData;
         this.groupData = groupData;
         this.serviceData = serviceData;
         this.registrationData = registrationData;
@@ -581,24 +729,5 @@ export class DINavigatorTreeItem extends vscode.TreeItem {
 
         // Set context value for menu contributions
         this.contextValue = itemType;
-
-        // Set icons based on type
-        switch (itemType) {
-            case 'group':
-                this.iconPath = new vscode.ThemeIcon('package');
-                break;
-            case 'service':
-                this.iconPath = new vscode.ThemeIcon('symbol-class');
-                break;
-            case 'registration':
-                this.iconPath = new vscode.ThemeIcon('add');
-                break;
-            case 'injection-site':
-                this.iconPath = new vscode.ThemeIcon('arrow-right');
-                break;
-            case 'info':
-                this.iconPath = new vscode.ThemeIcon('info');
-                break;
-        }
     }
 }

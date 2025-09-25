@@ -28,3 +28,4 @@ test-project
 **/*.ps1
 **/*.sh
 **/*.md
+**/Release/**

@@ -51,20 +51,11 @@
         "title": "DI Navigator: Refresh Tree View"
       }
     ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "di-navigator",
-          "title": "DI Navigator",
-          "icon": "./icon.png"
-        }
-      ]
-    },
     "views": {
-      "di-navigator": [
+      "explorer": [
         {
           "id": "diNavigator",
-          "name": "Services",
+          "name": "DI Services",
           "icon": "./icon.png",
           "when": "diNavigator:validWorkspace"
         }

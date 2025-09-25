@@ -4,13 +4,6 @@ import { ErrorHandler } from './ErrorHandler';
 import { TreeViewManager } from './TreeViewManager';
 import { AnalysisService } from './AnalysisService';
 
-/**
- * Main DI Navigator Extension Class
- *
- * This class serves as the central orchestrator for the DI Navigator extension.
- * It manages the lifecycle of all services, handles initialization and cleanup,
- * and coordinates between different components.
- */
 export class DINavigatorExtension {
     private readonly context: vscode.ExtensionContext;
     private readonly logger: Logger;
@@ -31,9 +24,6 @@ export class DINavigatorExtension {
         this.analysisService = new AnalysisService(this.logger, this.errorHandler);
     }
 
-    /**
-     * Initialize the extension and all its services
-     */
     async initialize(): Promise<void> {
         if (this.isInitialized) {
             this.logger.warn('Extension is already initialized');
@@ -75,9 +65,6 @@ export class DINavigatorExtension {
         }
     }
 
-    /**
-     * Register all extension commands
-     */
     private registerCommands(): void {
         // Helper function to register commands with error handling
         const registerCommand = (id: string, handler: (...args: any[]) => any, title: string) => {
@@ -132,9 +119,6 @@ export class DINavigatorExtension {
         this.logger.info('All commands registered successfully');
     }
 
-    /**
-      * Set up VSCode workspace context for conditional UI elements
-      */
     private setupWorkspaceContext(): void {
         const hasWorkspace = vscode.workspace.workspaceFolders !== undefined;
         vscode.commands.executeCommand('setContext', 'diNavigator:validWorkspace', hasWorkspace);
@@ -145,9 +129,6 @@ export class DINavigatorExtension {
         }
     }
 
-    /**
-     * Set up auto-refresh functionality if enabled in configuration
-     */
     private setupAutoRefresh(): void {
         const config = vscode.workspace.getConfiguration('di-navigator');
         const autoRefresh = config.get('autoRefresh', false);
@@ -169,9 +150,6 @@ export class DINavigatorExtension {
         }
     }
 
-    /**
-     * Analyze the current project for dependency injection configuration
-     */
     async analyzeProject(): Promise<void> {
         try {
             this.logger.info('Starting project analysis...');
@@ -194,12 +172,22 @@ export class DINavigatorExtension {
 
                 progress.report({ message: 'Analysis complete!' });
 
+                // For now, wrap the single project result in WorkspaceAnalysis format
+                const workspaceAnalysis: any = {
+                    projects: [analysisResult],
+                    totalServices: analysisResult.serviceGroups.reduce(
+                        (acc: number, group: any) => acc + group.services.length, 0
+                    ),
+                    totalProjects: 1,
+                    analysisTimestamp: new Date()
+                };
+
                 // Update tree view with results
-                this.treeViewManager.updateAnalysisData(analysisResult);
+                this.treeViewManager.updateAnalysisData(workspaceAnalysis);
 
                 // Show results summary
                 const serviceCount = analysisResult.serviceGroups.reduce(
-                    (acc, group) => acc + group.services.length, 0
+                    (acc: number, group: any) => acc + group.services.length, 0
                 );
 
                 vscode.window.showInformationMessage(
@@ -214,10 +202,6 @@ export class DINavigatorExtension {
         }
     }
 
-
-    /**
-     * Find and highlight all dependency injection sites
-     */
     async findInjectionSites(): Promise<void> {
         try {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
@@ -229,27 +213,29 @@ export class DINavigatorExtension {
             const diagnostics = vscode.languages.createDiagnosticCollection('di-injection-sites');
             const injectionDiagnostics: vscode.Diagnostic[] = [];
 
-            for (const group of analysisData.serviceGroups) {
-                for (const service of group.services) {
-                    for (const site of service.injectionSites) {
-                        const uri = vscode.Uri.file(site.filePath);
-                        const range = new vscode.Range(
-                            new vscode.Position(site.lineNumber - 1, 0),
-                            new vscode.Position(site.lineNumber - 1, 100)
-                        );
+            for (const project of analysisData.projects) {
+                for (const group of project.serviceGroups) {
+                    for (const service of group.services) {
+                        for (const site of service.injectionSites) {
+                            const uri = vscode.Uri.file(site.filePath);
+                            const range = new vscode.Range(
+                                new vscode.Position(site.lineNumber - 1, 0),
+                                new vscode.Position(site.lineNumber - 1, 100)
+                            );
 
-                        const diagnostic = new vscode.Diagnostic(
-                            range,
-                            `Injects ${site.serviceType}`,
-                            vscode.DiagnosticSeverity.Information
-                        );
+                            const diagnostic = new vscode.Diagnostic(
+                                range,
+                                `Injects ${site.serviceType}`,
+                                vscode.DiagnosticSeverity.Information
+                            );
 
-                        diagnostic.source = 'DI Navigator';
-                        injectionDiagnostics.push(diagnostic);
+                            diagnostic.source = 'DI Service Navigator';
+                            injectionDiagnostics.push(diagnostic);
 
-                        // Group diagnostics by file
-                        const existingDiagnostics = diagnostics.get(uri) || [];
-                        diagnostics.set(uri, [...existingDiagnostics, diagnostic]);
+                            // Group diagnostics by file
+                            const existingDiagnostics = diagnostics.get(uri) || [];
+                            diagnostics.set(uri, [...existingDiagnostics, diagnostic]);
+                        }
                     }
                 }
             }
@@ -259,15 +245,11 @@ export class DINavigatorExtension {
             );
 
             this.logger.info(`Found ${injectionDiagnostics.length} injection sites`);
-
         } catch (error) {
             this.errorHandler.handleError(error, 'Failed to find injection sites');
         }
     }
 
-    /**
-     * Detect and display dependency injection conflicts
-     */
     async detectConflicts(): Promise<void> {
         try {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
@@ -276,9 +258,10 @@ export class DINavigatorExtension {
                 return;
             }
 
-            const conflicts = analysisData.serviceGroups
-                .flatMap(group => group.services)
-                .filter(service => service.hasConflicts);
+            const conflicts = analysisData.projects
+                .flatMap(project => project.serviceGroups)
+                .flatMap((group: any) => group.services)
+                .filter((service: any) => service.hasConflicts);
 
             if (conflicts.length === 0) {
                 vscode.window.showInformationMessage('DI Navigator: No conflicts detected');
@@ -307,9 +290,6 @@ export class DINavigatorExtension {
         }
     }
 
-    /**
-     * Open the configuration settings
-     */
     async openConfiguration(): Promise<void> {
         try {
             await vscode.commands.executeCommand('workbench.action.openSettings', 'di-navigator');
@@ -318,9 +298,6 @@ export class DINavigatorExtension {
         }
     }
 
-    /**
-     * Refresh the tree view with latest data
-     */
     refreshTreeView(): void {
         try {
             this.treeViewManager.refresh();
@@ -328,24 +305,19 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to refresh tree view');
         }
     }
-    /**
-     * Dispose of all resources and clean up
-     */
-    dispose(): void {
-        if (this.isDisposed) {
-            return;
-        }
 
+    dispose(): void {
         try {
+            if (this.isDisposed) {
+                return;
+            }
             this.logger.info('Disposing DI Navigator Extension...');
 
-            // Dispose all services
             this.analysisService.dispose();
             this.treeViewManager.dispose();
 
             this.isDisposed = true;
             this.logger.info('DI Navigator Extension disposed successfully');
-
         } catch (error) {
             this.logger.error('Error during extension disposal', 'DINavigatorExtension', error);
         }

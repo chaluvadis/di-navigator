@@ -4,12 +4,6 @@ import { ErrorHandler } from './ErrorHandler';
 import { RoslynDiAnalyzer } from '../roslynDiAnalyzer';
 import { ProjectDI } from '../models';
 
-/**
- * Analysis Service
- *
- * Handles dependency injection analysis operations using the Roslyn tool.
- * Manages the analysis lifecycle, caching, and result processing.
- */
 export class AnalysisService {
     private readonly logger: Logger;
     private readonly errorHandler: ErrorHandler;
@@ -41,11 +35,6 @@ export class AnalysisService {
         });
     }
 
-    /**
-     * Analyze a .NET project for dependency injection configuration
-     * @param projectPath Path to the project to analyze
-     * @returns Analysis results
-     */
     async analyzeProject(projectPath: string): Promise<ProjectDI> {
         if (this.isAnalysisInProgress) {
             throw new Error('Analysis is already in progress');
@@ -77,9 +66,6 @@ export class AnalysisService {
         }
     }
 
-    /**
-     * Dispose of the analysis service
-     */
     dispose(): void {
         this.logger.info('Disposing AnalysisService...');
         if (this.diAnalyzer) {
