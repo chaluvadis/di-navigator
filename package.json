@@ -31,35 +31,40 @@
   "contributes": {
     "commands": [
       {
-        "command": "di-navigator.selectProject",
-        "title": "DI Navigator: Select Project"
+        "command": "di-navigator.analyzeProject",
+        "title": "DI Navigator: Analyze Project"
       },
       {
-        "command": "di-navigator.clearProjectSelection",
-        "title": "DI Navigator: Clear Project Selection"
+        "command": "di-navigator.findInjectionSites",
+        "title": "DI Navigator: Find Injection Sites"
       },
       {
-        "command": "di-navigator.refreshServices",
-        "title": "DI Navigator: Refresh Services"
+        "command": "di-navigator.detectConflicts",
+        "title": "DI Navigator: Detect Conflicts"
       },
       {
-        "command": "di-navigator.goToImplementation",
-        "title": "DI Navigator: Go to Implementation"
+        "command": "di-navigator.openConfiguration",
+        "title": "DI Navigator: Open Configuration"
       },
       {
-        "command": "di-navigator.goToInjectionSite",
-        "title": "DI Navigator: Go to Injection Site"
-      },
-      {
-        "command": "di-navigator.resolveConflicts",
-        "title": "DI Navigator: Resolve Conflicts"
+        "command": "di-navigator.refreshTreeView",
+        "title": "DI Navigator: Refresh Tree View"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "di-navigator",
+          "title": "DI Navigator",
+          "icon": "./icon.png"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "di-navigator": [
         {
           "id": "diNavigator",
-          "name": "DI Navigator",
+          "name": "Services",
           "icon": "./icon.png",
           "when": "diNavigator:validWorkspace"
         }
@@ -68,33 +73,43 @@
     "configuration": {
       "title": "DI Navigator",
       "properties": {
-        "diNavigator.excludeFolders": {
-          "type": "array",
-          "default": [
-            "**/bin/**",
-            "**/obj/**",
-            "**/Properties/**"
-          ],
-          "description": "Glob patterns for folders to exclude from file scanning (e.g., build artifacts).",
-          "items": {
-            "type": "string"
-          }
+        "di-navigator.useExternalTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use external tools (dotnet CLI, Roslyn) for analysis"
         },
-        "diNavigator.toolPath": {
+        "di-navigator.analysisDepth": {
           "type": "string",
-          "default": "",
-          "description": "Toolpath for DI analyzer (deprecated - now uses JavaScript parsing)."
+          "enum": ["basic", "standard", "deep"],
+          "default": "standard",
+          "description": "Depth of dependency injection analysis"
         },
-        "diNavigator.diContainer": {
-          "type": "string",
-          "enum": [
-            "Microsoft.Extensions.DependencyInjection",
-            "Autofac",
-            "Castle.Windsor",
-            "Unity"
-          ],
-          "default": "Microsoft.Extensions.DependencyInjection",
-          "description": "DI Container to analyze."
+        "di-navigator.showInjectionSites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show injection sites in the analysis"
+        },
+        "di-navigator.detectCycles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect circular dependencies"
+        },
+        "di-navigator.highlightConflicts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight conflicting service registrations"
+        },
+        "di-navigator.autoRefresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically refresh analysis when files change"
+        },
+        "di-navigator.refreshInterval": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1000,
+          "maximum": 30000,
+          "description": "Auto-refresh interval in milliseconds"
         }
       }
     }
@@ -112,22 +127,25 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "node --no-warnings .vscode-test.mjs",
-    "dpackage": "npm run compile && vsce package"
+    "dpackage": "npm run compile && vsce package",
+    "build-roslyn-tool": "cd roslyn-tool && dotnet build",
+    "test-roslyn-tool": "cd roslyn-tool && dotnet run -- --input ../test-project",
+    "package-with-roslyn": "npm run build-roslyn-tool && npm run compile && vsce package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "24.5.2",
     "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.104.0",
-    "@typescript-eslint/eslint-plugin": "^8.44.0",
-    "@typescript-eslint/parser": "^8.44.0",
+    "@typescript-eslint/eslint-plugin": "^8.44.1",
+    "@typescript-eslint/parser": "^8.44.1",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.25.10",
-    "eslint": "^9.35.0",
+    "eslint": "^9.36.0",
     "npm-run-all": "^4.1.5",
     "sinon": "^21.0.0",
     "typescript": "^5.9.2",
-    "@vscode/vsce": "^3.6.0"
+    "@vscode/vsce": "^3.6.1"
   }
 }

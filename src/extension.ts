@@ -1,45 +1,37 @@
-import { ExtensionContext, window, workspace } from 'vscode';
-import { diNavigatorProvider } from './treeView';
-import { serviceProvider } from './serviceProvider';
-import { registerCommands } from './commands';
-import {
-  updateWorkspaceContext,
-  createDebouncedRefreshHandler,
-  setupFileSystemWatchers
-} from './utils';
-import { NET_FILE_PATTERNS } from './const';
+import * as vscode from 'vscode';
+import { DINavigatorExtension } from './core/DINavigatorExtension';
 
-export async function activate(context: ExtensionContext): Promise<void> {
-  console.log('🚀 DI Navigator: Extension activation started!');
-  console.log('📁 DI Navigator: Current workspace folders:', workspace.workspaceFolders?.map(f => f.uri.fsPath) || 'None');
-
-  serviceProvider.setContext(context);
-
-  const treeViewDisposable = window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
-
-  context.subscriptions.push(treeViewDisposable);
-
-  console.log('🌳 DI Navigator: Tree view provider registered');
-
-  updateWorkspaceContext().catch(err => console.error('Error during initial workspace detection:', err));
-
-  const debouncedRefresh = createDebouncedRefreshHandler(500);
-  setupFileSystemWatchers(context, NET_FILE_PATTERNS, debouncedRefresh);
-
-  console.log('👀 DI Navigator: File system watchers set up');
-
-  // Register commands
-  registerCommands(context);
-
-  console.log('✅ DI Navigator: Extension fully activated and ready!');
+let diNavigator: DINavigatorExtension | undefined;
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    try {
+        diNavigator = new DINavigatorExtension(context);
+        await diNavigator.initialize();
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            const workspaceName = workspaceFolders[0].name;
+            vscode.window.showInformationMessage(
+                `DI Navigator: Ready to analyze ${workspaceName}!`,
+                'Analyze Now'
+            ).then(selection => {
+                if (selection === 'Analyze Now') {
+                    diNavigator?.analyzeProject();
+                }
+            });
+        }
+    } catch (error) {
+        vscode.window.showErrorMessage(
+            `DI Navigator: Failed to activate - ${error}`
+        );
+    }
 }
 
-export function deactivate() {
-  console.log('🔌 DI Navigator: Extension deactivation started');
-  serviceProvider.clearState();
-  console.log('🧹 DI Navigator: Service provider state cleared');
-  // Refresh to clear the tree view
-  diNavigatorProvider.refresh();
-  console.log('🔄 DI Navigator: Tree view refreshed after deactivation');
-  console.log('👋 DI Navigator: Extension deactivated');
+export function deactivate(): void {
+    try {
+        if (diNavigator) {
+            diNavigator.dispose();
+            diNavigator = undefined;
+        }
+    } catch (error) {
+        console.error('❌ DI Navigator: Error during deactivation:', error);
+    }
 }

@@ -1,6 +1,3 @@
-
-import { TreeItem } from 'vscode';
-
 export const enum Lifetime {
     Singleton = 'Singleton',
     Scoped = 'Scoped',
@@ -13,7 +10,6 @@ export interface Registration {
     lifetime: Lifetime;
     serviceType: string; // e.g., 'IUserService'
     implementationType: string; // e.g., 'UserService'
-    name?: string; // For named services, e.g., key for named registration
     filePath: string;
     lineNumber: number;
     methodCall: string; // e.g., 'AddScoped'
@@ -28,7 +24,7 @@ export interface Service {
 }
 
 export interface ServiceGroup {
-    lifetime: Lifetime;
+    lifetime: Lifetime | string; // Allow custom lifetimes like 'Others'
     services: Service[];
     color: string; // For TreeView theming, e.g., '#FF0000' for Singleton
     count?: number;
@@ -58,18 +54,3 @@ export interface Conflict {
     type: string; // 'Duplicate', 'MissingImpl', etc.
     details: string;
 }
-
-export const enum Colors {
-    Singleton = '#FF5722',
-    Scoped = '#2196F3',
-    Transient = '#4CAF50',
-    Default = '#9E9E9E',
-    Others = '#808080'
-}
-
-export interface ConflictItem {
-    type: string;
-    details: string;
-}
-
-export type DiNavigatorItem = TreeItem | ProjectDI | ServiceGroup | Service | InjectionSite | ConflictItem;

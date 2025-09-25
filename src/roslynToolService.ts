@@ -1,0 +1,156 @@
+import * as path from 'path';
+import * as fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { ProjectDI, ServiceGroup, Service, Lifetime } from './models';
+
+const execAsync = promisify(exec);
+export class RoslynToolService {
+    private readonly roslynToolPath: string;
+
+    constructor() {
+        this.roslynToolPath = path.join(__dirname, '..', 'roslyn-tool', 'bin', 'Debug', 'net9.0', 'DIServiceAnalyzer.dll');
+    }
+    async analyzeSolution(solutionPath: string): Promise<any> {
+        try {
+            if (!fs.existsSync(solutionPath)) {
+                throw new Error(`Solution file not found: ${solutionPath}`);
+            }
+
+            if (!fs.existsSync(this.roslynToolPath)) {
+                throw new Error(`Roslyn tool not found at: ${this.roslynToolPath}. Please build the roslyn-tool project.`);
+            }
+
+            const command = `dotnet "${this.roslynToolPath}" --input "${solutionPath}" --output-format json`;
+            const { stdout, stderr } = await execAsync(command, {
+                cwd: path.dirname(solutionPath),
+                maxBuffer: 1024 * 1024 * 10
+            });
+
+            if (stderr) {
+                console.warn(`RoslynToolService stderr: ${stderr}`);
+            }
+            return JSON.parse(stdout);
+        } catch (error) {
+            console.error(`RoslynToolService analysis failed: ${error}`);
+            throw new Error(`Roslyn tool analysis failed: ${error}`);
+        }
+    }
+
+    convertToProjectDI(analysisResult: any, projectPath: string): ProjectDI {
+        try {
+            const serviceGroups: ServiceGroup[] = [];
+            const lifetimeMap = new Map<string, Service[]>();
+
+            for (const project of analysisResult.Projects || []) {
+                for (const registration of project.ServiceRegistrations || []) {
+                    const lifetime = this.mapLifetime(registration.Lifetime);
+                    const groupKey = lifetime;
+
+                    if (!lifetimeMap.has(groupKey)) {
+                        lifetimeMap.set(groupKey, []);
+                    }
+
+                    const service = this.createServiceFromRegistration(registration, project);
+                    lifetimeMap.get(groupKey)!.push(service);
+                }
+            }
+
+            for (const [lifetime, services] of Array.from(lifetimeMap.entries())) {
+                serviceGroups.push({
+                    lifetime: lifetime as Lifetime,
+                    services,
+                    color: this.getLifetimeColor(lifetime as Lifetime),
+                    count: services.length
+                });
+            }
+
+            return {
+                projectPath,
+                projectName: path.basename(projectPath, path.extname(projectPath)),
+                serviceGroups,
+                cycles: [],
+                dependencyGraph: {},
+                parseStatus: serviceGroups.length > 0 ? 'success' : 'partial',
+                errorDetails: serviceGroups.length === 0 ? ['No services found in analysis'] : undefined
+            };
+
+        } catch (error) {
+            console.error(`RoslynToolService conversion failed: ${error}`);
+            return {
+                projectPath,
+                projectName: path.basename(projectPath, path.extname(projectPath)),
+                serviceGroups: [],
+                cycles: [],
+                dependencyGraph: {},
+                parseStatus: 'failed',
+                errorDetails: [`Conversion failed: ${error}`]
+            };
+        }
+    }
+
+    private mapLifetime(lifetime: any): Lifetime {
+        // Convert to string and handle null/undefined values
+        const lifetimeStr = lifetime?.toString()?.toLowerCase() || '';
+
+        switch (lifetimeStr) {
+            case 'singleton':
+                return Lifetime.Singleton;
+            case 'scoped':
+                return Lifetime.Scoped;
+            case 'transient':
+                return Lifetime.Transient;
+            default:
+                return Lifetime.Others;
+        }
+    }
+    private getLifetimeColor(lifetime: Lifetime): string {
+        switch (lifetime) {
+            case Lifetime.Singleton:
+                return '#FF5722';
+            case Lifetime.Scoped:
+                return '#2196F3';
+            case Lifetime.Transient:
+                return '#4CAF50';
+            case Lifetime.Others:
+                return '#9E9E9E';
+            default:
+                return '#2A2A2A';
+        }
+    }
+
+    private createServiceFromRegistration(registration: any, _project: any): Service {
+        const serviceType = registration.ServiceType || 'Unknown';
+        const implementationType = registration.ImplementationType || serviceType;
+
+        // Map injection sites if available
+        const injectionSites = this.mapInjectionSites(registration.InjectionSites || []);
+
+        return {
+            name: serviceType,
+            registrations: [{
+                id: `${registration.FilePath}:${registration.LineNumber}`,
+                lifetime: this.mapLifetime(registration.Lifetime),
+                serviceType,
+                implementationType,
+                filePath: registration.FilePath,
+                lineNumber: registration.LineNumber,
+                methodCall: registration.RegistrationMethod
+            }],
+            hasConflicts: false,
+            injectionSites
+        };
+    }
+
+    private mapInjectionSites(injectionSites: any[]): any[] {
+        return injectionSites.map(site => ({
+            filePath: site.FilePath || '',
+            lineNumber: site.LineNumber || 0,
+            className: site.ClassName || '',
+            memberName: site.MemberName || '',
+            type: site.Type || 'constructor',
+            serviceType: site.ServiceType || '',
+            linkedRegistrationIds: site.LinkedRegistrationIds || []
+        }));
+    }
+}
