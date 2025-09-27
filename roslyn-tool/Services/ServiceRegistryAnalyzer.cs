@@ -9,8 +9,10 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
         {
             var tree = CSharpSyntaxTree.ParseText(sourceCode);
             var root = tree.GetRoot();
-            var invocations = root.DescendantNodes().OfType<InvocationExpressionSyntax>();
-            foreach (var invocation in invocations)
+
+            // Only analyze method calls on IServiceCollection variables
+            var serviceCollectionInvocations = FindServiceCollectionInvocations(root);
+            foreach (var invocation in serviceCollectionInvocations)
             {
                 var registration = AnalyzeInvocation(invocation, filePath);
                 if (registration is not null)
@@ -32,6 +34,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             var expression = invocation.Expression.ToString();
             var methodName = GetMethodName(expression);
             if (string.IsNullOrWhiteSpace(methodName)) return null;
+
             var lineNumber = invocation
                             .GetLocation()
                             .GetLineSpan().StartLinePosition.Line + 1;
@@ -100,20 +103,58 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
     }
     private static string GetMethodName(string expression)
     {
-        var isService = expression.StartsWith("services") || expression.StartsWith("builder.Services");
-        return isService ? expression.Split('.').Last() : string.Empty;
+        // More precise detection of IServiceCollection method calls
+        if (expression.Contains("services.Add") || expression.Contains("Services.Add"))
+        {
+            return expression.Split('.').Last();
+        }
+        return string.Empty;
+    }
+
+    private static List<InvocationExpressionSyntax> FindServiceCollectionInvocations(SyntaxNode root)
+    {
+        var invocations = new List<InvocationExpressionSyntax>();
+
+        // Find all invocations that are DI registration methods
+        var allInvocations = root.DescendantNodes().OfType<InvocationExpressionSyntax>();
+        foreach (var invocation in allInvocations)
+        {
+            if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+            {
+                var expressionText = memberAccess.Expression.ToString();
+                var methodName = memberAccess.Name.ToString();
+
+                // Check if this is a DI method call on services collection
+                if (IsDiMethod(methodName) &&
+                    (expressionText == "services" ||
+                     expressionText == "builder.Services" ||
+                     expressionText.EndsWith(".Services")))
+                {
+                    invocations.Add(invocation);
+                }
+            }
+        }
+
+        return invocations;
     }
     private static ServiceScope GetServiceLifetime(string methodName)
     {
-        var baseMethodName = methodName.Split('<')[0];
+        // Remove generic type parameters for comparison
+        var baseMethodName = methodName.Split('<')[0].Trim();
+
         return baseMethodName switch
         {
             "AddTransient" => ServiceScope.Transient,
             "AddScoped" => ServiceScope.Scoped,
             "AddSingleton" => ServiceScope.Singleton,
+            "TryAddTransient" => ServiceScope.Transient,
+            "TryAddScoped" => ServiceScope.Scoped,
+            "TryAddSingleton" => ServiceScope.Singleton,
             "AddControllers" => ServiceScope.Controllers,
             "AddMvc" => ServiceScope.Controllers,
             "AddRazorPages" => ServiceScope.Controllers,
+            "AddControllersWithViews" => ServiceScope.Controllers,
+            "AddRazorRuntimeCompilation" => ServiceScope.Controllers,
             _ => ServiceScope.Others
         };
     }
@@ -205,9 +246,13 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             return "Unknown";
         }
     }
-    private static bool IsDiMethod(string methodName) =>
-        methodName is "AddTransient" or "AddScoped" or "AddSingleton"
-                   or "AddControllers" or "AddMvc" or "AddRazorPages";
+    private static bool IsDiMethod(string methodName)
+    {
+        // Extract the base method name before generic parameters
+        var baseMethodName = methodName.Split('<')[0];
+        return baseMethodName is "AddTransient" or "AddScoped" or "AddSingleton"
+                              or "AddControllers" or "AddMvc" or "AddRazorPages";
+    }
     private static ServiceRegistration CreateServiceRegistration(
         string serviceType,
         string implementationType,
@@ -226,7 +271,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
         Namespace = ExtractNamespace(filePath)
     };
 
-    private static List<string> ExtractServicesFromMethod(MethodDeclarationSyntax methodDecl, string filePath)
+    private static List<string> ExtractServicesFromMethod(MethodDeclarationSyntax methodDecl)
     {
         var registeredServices = new List<string>();
         try
@@ -257,24 +302,42 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
         {
             var tree = CSharpSyntaxTree.ParseText(sourceCode);
             var root = tree.GetRoot();
-            // Look for classes that might be service registries
+
+            // Only look for classes that actually contain DI registration methods
             var classDeclarations = root.DescendantNodes().OfType<ClassDeclarationSyntax>();
             foreach (var classDecl in classDeclarations)
             {
-                var customRegistry = AnalyzeCustomRegistry(classDecl, filePath);
-                if (customRegistry is not null)
+                // Check if class contains DI methods before analyzing
+                var hasDiMethods = classDecl.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(inv => IsDiMethod(GetMethodName(inv.Expression.ToString())));
+
+                if (hasDiMethods)
                 {
-                    customRegistries.Add(customRegistry);
+                    var customRegistry = AnalyzeCustomRegistry(classDecl, filePath);
+                    if (customRegistry is not null)
+                    {
+                        customRegistries.Add(customRegistry);
+                    }
                 }
             }
+
             // Look for extension methods that register services
             var methodDeclarations = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
             foreach (var methodDecl in methodDeclarations)
             {
-                var customRegistry = AnalyzeExtensionMethod(methodDecl, filePath);
-                if (customRegistry is not null)
+                // Check if method contains DI registrations before analyzing
+                var hasDiMethods = methodDecl.DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .Any(inv => IsDiMethod(GetMethodName(inv.Expression.ToString())));
+
+                if (hasDiMethods)
                 {
-                    customRegistries.Add(customRegistry);
+                    var customRegistry = AnalyzeExtensionMethod(methodDecl, filePath);
+                    if (customRegistry is not null)
+                    {
+                        customRegistries.Add(customRegistry);
+                    }
                 }
             }
         }
@@ -301,7 +364,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                 // Extract actual service registrations from all methods in the class
                 foreach (var method in methods)
                 {
-                    var servicesInMethod = ExtractServicesFromMethod(method, filePath);
+                    var servicesInMethod = ExtractServicesFromMethod(method);
                     registeredServices.AddRange(servicesInMethod);
                 }
                 return new CustomRegistry
@@ -335,7 +398,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
 
             if (hasDiMethods && methodName.StartsWith("Add"))
             {
-                registeredServices = ExtractServicesFromMethod(methodDecl, filePath);
+                registeredServices = ExtractServicesFromMethod(methodDecl);
                 return new CustomRegistry
                 {
                     RegistryName = methodName,

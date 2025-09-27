@@ -3,6 +3,7 @@ import { Logger } from './Logger';
 import { ErrorHandler } from './ErrorHandler';
 import { TreeViewManager } from './TreeViewManager';
 import { AnalysisService } from './AnalysisService';
+import { WorkspaceAnalysis } from '../models';
 
 export class DINavigatorExtension {
     private readonly context: vscode.ExtensionContext;
@@ -116,6 +117,30 @@ export class DINavigatorExtension {
             'Refresh the DI Navigator tree view with latest analysis data'
         );
 
+        registerCommand(
+            'di-navigator.showServiceDetails',
+            (serviceItem: any) => this.showServiceDetails(serviceItem),
+            'Show detailed service information'
+        );
+
+        registerCommand(
+            'di-navigator.navigateToServiceRegistration',
+            (serviceItem: any) => this.navigateToServiceRegistration(serviceItem),
+            'Navigate to service registration location'
+        );
+
+        registerCommand(
+            'di-navigator.showServiceSummary',
+            (serviceItem: any) => this.showServiceSummary(serviceItem),
+            'Show service summary information'
+        );
+
+        registerCommand(
+            'di-navigator.showServiceConflicts',
+            (serviceItem: any) => this.showServiceConflicts(serviceItem),
+            'Show service conflicts'
+        );
+
         this.logger.info('All commands registered successfully');
     }
 
@@ -172,8 +197,8 @@ export class DINavigatorExtension {
 
                 progress.report({ message: 'Analysis complete!' });
 
-                // For now, wrap the single project result in WorkspaceAnalysis format
-                const workspaceAnalysis: any = {
+                // Wrap the single project result in WorkspaceAnalysis format
+                const workspaceAnalysis: WorkspaceAnalysis = {
                     projects: [analysisResult],
                     totalServices: analysisResult.serviceGroups.reduce(
                         (acc: number, group: any) => acc + group.services.length, 0
@@ -181,6 +206,14 @@ export class DINavigatorExtension {
                     totalProjects: 1,
                     analysisTimestamp: new Date()
                 };
+
+                // Log the structure for debugging
+                this.logger.info('WorkspaceAnalysis structure created', 'DINavigatorExtension', {
+                    totalServices: workspaceAnalysis.totalServices,
+                    totalProjects: workspaceAnalysis.totalProjects,
+                    projectName: analysisResult.projectName,
+                    serviceGroupsCount: analysisResult.serviceGroups.length
+                });
 
                 // Update tree view with results
                 this.treeViewManager.updateAnalysisData(workspaceAnalysis);
@@ -303,6 +336,54 @@ export class DINavigatorExtension {
             this.treeViewManager.refresh();
         } catch (error) {
             this.errorHandler.handleError(error, 'Failed to refresh tree view');
+        }
+    }
+
+    showServiceDetails(serviceItem: any): void {
+        try {
+            if (serviceItem && serviceItem.serviceData) {
+                // Delegate to TreeViewManager
+                const mockTreeItem = {
+                    serviceData: serviceItem.serviceData,
+                    itemType: 'service'
+                } as any;
+                this.treeViewManager['showServiceDetails'](serviceItem.serviceData);
+            }
+        } catch (error) {
+            this.errorHandler.handleError(error, 'Failed to show service details');
+        }
+    }
+
+    navigateToServiceRegistration(serviceItem: any): void {
+        try {
+            if (serviceItem && serviceItem.serviceData) {
+                // Delegate to TreeViewManager
+                this.treeViewManager['navigateToFirstRegistration'](serviceItem.serviceData);
+            }
+        } catch (error) {
+            this.errorHandler.handleError(error, 'Failed to navigate to service registration');
+        }
+    }
+
+    showServiceSummary(serviceItem: any): void {
+        try {
+            if (serviceItem && serviceItem.serviceData) {
+                // Delegate to TreeViewManager
+                this.treeViewManager['showServiceSummary'](serviceItem.serviceData);
+            }
+        } catch (error) {
+            this.errorHandler.handleError(error, 'Failed to show service summary');
+        }
+    }
+
+    showServiceConflicts(serviceItem: any): void {
+        try {
+            if (serviceItem && serviceItem.serviceData) {
+                // Delegate to TreeViewManager
+                this.treeViewManager['showServiceConflicts'](serviceItem.serviceData);
+            }
+        } catch (error) {
+            this.errorHandler.handleError(error, 'Failed to show service conflicts');
         }
     }
 

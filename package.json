@@ -35,22 +35,54 @@
         "title": "DI Navigator: Analyze Project"
       },
       {
-        "command": "di-navigator.findInjectionSites",
-        "title": "DI Navigator: Find Injection Sites"
-      },
-      {
-        "command": "di-navigator.detectConflicts",
-        "title": "DI Navigator: Detect Conflicts"
-      },
-      {
-        "command": "di-navigator.openConfiguration",
-        "title": "DI Navigator: Open Configuration"
-      },
-      {
         "command": "di-navigator.refreshTreeView",
         "title": "DI Navigator: Refresh Tree View"
+      },
+      {
+        "command": "di-navigator.showServiceDetails",
+        "title": "Show Service Details",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "di-navigator.navigateToServiceRegistration",
+        "title": "Go to Registration",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "di-navigator.showServiceSummary",
+        "title": "Show Service Summary",
+        "icon": "$(info)"
+      },
+      {
+        "command": "di-navigator.showServiceConflicts",
+        "title": "Show Service Conflicts",
+        "icon": "$(warning)"
       }
     ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "di-navigator.navigateToServiceRegistration",
+          "when": "viewItem == service",
+          "group": "navigation@1"
+        },
+        {
+          "command": "di-navigator.showServiceDetails",
+          "when": "viewItem == service",
+          "group": "navigation@2"
+        },
+        {
+          "command": "di-navigator.showServiceSummary",
+          "when": "viewItem == service",
+          "group": "navigation@3"
+        },
+        {
+          "command": "di-navigator.showServiceConflicts",
+          "when": "viewItem == service",
+          "group": "navigation@4"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {
@@ -63,62 +95,14 @@
     },
     "configuration": {
       "title": "DI Navigator",
-      "properties": {
-        "di-navigator.useExternalTools": {
-          "type": "boolean",
-          "default": true,
-          "description": "Use external tools (dotnet CLI, Roslyn) for analysis"
-        },
-        "di-navigator.analysisDepth": {
-          "type": "string",
-          "enum": ["basic", "standard", "deep"],
-          "default": "standard",
-          "description": "Depth of dependency injection analysis"
-        },
-        "di-navigator.showInjectionSites": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show injection sites in the analysis"
-        },
-        "di-navigator.detectCycles": {
-          "type": "boolean",
-          "default": true,
-          "description": "Detect circular dependencies"
-        },
-        "di-navigator.highlightConflicts": {
-          "type": "boolean",
-          "default": true,
-          "description": "Highlight conflicting service registrations"
-        },
-        "di-navigator.autoRefresh": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically refresh analysis when files change"
-        },
-        "di-navigator.refreshInterval": {
-          "type": "number",
-          "default": 5000,
-          "minimum": 1000,
-          "maximum": 30000,
-          "description": "Auto-refresh interval in milliseconds"
-        }
-      }
+      "properties": {}
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
-    "watch": "npm-run-all -p watch:*",
-    "watch:esbuild": "node esbuild.js --watch",
-    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint",
-    "compile-tests": "tsc -p . --outDir out",
-    "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint src",
-    "test": "node --no-warnings .vscode-test.mjs",
-    "dpackage": "npm run compile && vsce package",
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
     "build-roslyn-tool": "cd roslyn-tool && dotnet build",
     "test-roslyn-tool": "cd roslyn-tool && dotnet run -- --input ../test-project",
     "package-with-roslyn": "npm run build-roslyn-tool && npm run compile && vsce package"
@@ -137,6 +121,6 @@
     "npm-run-all": "^4.1.5",
     "sinon": "^21.0.0",
     "typescript": "^5.9.2",
-    "@vscode/vsce": "^3.6.1"
+    "@vscode/vsce": "^3.6.2"
   }
 }

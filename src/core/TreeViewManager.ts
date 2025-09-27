@@ -41,6 +41,9 @@ export class TreeViewManager {
             canSelectMany: false
         });
 
+        // Add context menu commands
+        this.addContextMenuCommands();
+
         // Handle tree item selection
         this.treeView.onDidChangeSelection((event) => {
             this.handleTreeSelection(event.selection);
@@ -57,6 +60,14 @@ export class TreeViewManager {
         });
 
         this.logger.info('TreeViewManager initialized successfully');
+    }
+
+    /**
+     * Add context menu commands for tree items
+     */
+    private addContextMenuCommands(): void {
+        // Note: Commands are registered in DINavigatorExtension.ts to avoid duplicates
+        // This method is reserved for future context menu setup if needed
     }
 
     updateAnalysisData(analysisData: WorkspaceAnalysis): void {
@@ -205,25 +216,25 @@ export class TreeViewManager {
     }
 
     /**
-     * Handle service selection
-     * @param item Selected service item
-     */
-    private handleServiceSelection(item: DINavigatorTreeItem): void {
-        if (!item.serviceData) {
-            this.logger.warn('No service data available for selected item', 'TreeViewManager');
-            return;
-        }
+       * Handle service selection
+       * @param item Selected service item
+       */
+     private handleServiceSelection(item: DINavigatorTreeItem): void {
+         if (!item.serviceData) {
+             this.logger.warn('No service data available for selected item', 'TreeViewManager');
+             return;
+         }
 
-        const service = item.serviceData;
-        this.logger.debug(`Service selected: ${service.name}`, 'TreeViewManager', {
-            registrationCount: service.registrations.length,
-            injectionCount: service.injectionSites.length,
-            hasConflicts: service.hasConflicts
-        });
+         const service = item.serviceData;
+         this.logger.debug(`Service selected: ${service.name}`, 'TreeViewManager', {
+             registrationCount: service.registrations.length,
+             injectionCount: service.injectionSites.length,
+             hasConflicts: service.hasConflicts
+         });
 
-        // Show service details in a quick pick menu with options
-        this.showServiceQuickPick(service);
-    }
+         // Show service options in a quick pick menu
+         this.showServiceQuickPick(service);
+     }
 
     /**
      * Show service options in a quick pick menu
@@ -284,10 +295,10 @@ export class TreeViewManager {
     }
 
     /**
-     * Show detailed service information
-     * @param service Service data
-     */
-    private async showServiceDetails(service: any): Promise<void> {
+      * Show detailed service information
+      * @param service Service data
+      */
+    public async showServiceDetails(service: any): Promise<void> {
         const registrations = service.registrations
             .map((r: any, i: number) => `  ${i + 1}. ${r.methodCall} (${r.filePath}:${r.lineNumber})`)
             .join('\n');
@@ -323,10 +334,10 @@ ${injectionSites || '  None found'}
     }
 
     /**
-     * Navigate to the first registration of the service
-     * @param service Service data
-     */
-    private async navigateToFirstRegistration(service: any): Promise<void> {
+      * Navigate to the first registration of the service
+      * @param service Service data
+      */
+    public async navigateToFirstRegistration(service: any): Promise<void> {
         if (service.registrations.length === 0) {
             vscode.window.showWarningMessage(`No registrations found for service: ${service.name}`);
             return;
@@ -362,10 +373,10 @@ ${injectionSites || '  None found'}
     }
 
     /**
-     * Show service summary in output channel
-     * @param service Service data
-     */
-    private showServiceSummary(service: any): void {
+      * Show service summary in output channel
+      * @param service Service data
+      */
+    public showServiceSummary(service: any): void {
         const channel = vscode.window.createOutputChannel('DI Navigator');
         channel.clear();
         channel.appendLine(`=== Service Summary: ${service.name} ===`);
@@ -378,10 +389,10 @@ ${injectionSites || '  None found'}
     }
 
     /**
-     * Show service conflicts
-     * @param service Service data
-     */
-    private showServiceConflicts(service: any): void {
+      * Show service conflicts
+      * @param service Service data
+      */
+    public showServiceConflicts(service: any): void {
         if (!service.hasConflicts) {
             vscode.window.showInformationMessage(`No conflicts found for service: ${service.name}`);
             return;
@@ -509,16 +520,16 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
     }
 
     /**
-      * Get root level items (projects)
-      * @returns Array of project items
-      */
+       * Get root level items (projects)
+       * @returns Array of project items
+       */
     private getRootItems(): DINavigatorTreeItem[] {
         this.logger.debug('getRootItems called', 'DINavigatorTreeProvider', {
             hasAnalysisData: !!this.analysisData,
             projectsCount: this.analysisData?.projects?.length || 0
         });
 
-        if (!this.analysisData) {
+        if (!this.analysisData || !this.analysisData.projects || this.analysisData.projects.length === 0) {
             this.logger.debug('No analysis data available, returning info item', 'DINavigatorTreeProvider');
             return [new DINavigatorTreeItem(
                 'No analysis data available',
@@ -534,7 +545,8 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
 
             this.logger.debug(`Creating project item: ${label}`, 'DINavigatorTreeProvider', {
                 projectName: project.projectName,
-                totalServices
+                totalServices,
+                serviceGroupsCount: project.serviceGroups.length
             });
 
             return new DINavigatorTreeItem(
@@ -551,19 +563,27 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
     }
 
     /**
-     * Get service groups for a project
-     * @param projectItem Project tree item
-     * @returns Array of service group items
-     */
+      * Get service groups for a project
+      * @param projectItem Project tree item
+      * @returns Array of service group items
+      */
     private getServiceGroups(projectItem: DINavigatorTreeItem): DINavigatorTreeItem[] {
         const project = projectItem.projectData;
-        if (!project) {
+        if (!project || !project.serviceGroups) {
             return [];
         }
 
-        return project.serviceGroups.map((group: any) => {
+        // Sort service groups by lifetime priority
+        const lifetimeOrder = { 'Scoped': 0, 'Singleton': 1, 'Transient': 2, 'Others': 3 };
+        const sortedGroups = project.serviceGroups.sort((a: any, b: any) => {
+            const orderA = lifetimeOrder[a.lifetime as keyof typeof lifetimeOrder] ?? 999;
+            const orderB = lifetimeOrder[b.lifetime as keyof typeof lifetimeOrder] ?? 999;
+            return orderA - orderB;
+        });
+
+        return sortedGroups.map((group: any) => {
             const serviceCount = group.services.length;
-            const label = `${group.lifetime} Services (${serviceCount})`;
+            const label = `${group.lifetime} (${serviceCount})`;
 
             this.logger.debug(`Creating service group item: ${label}`, 'DINavigatorTreeProvider', {
                 lifetime: group.lifetime,
@@ -592,14 +612,17 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
             return [];
         }
 
-        return group.services.map((service: any) => {
+        // Sort services alphabetically by name
+        const sortedServices = group.services.sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+        return sortedServices.map((service: any) => {
             const registrationCount = service.registrations.length;
             const injectionCount = service.injectionSites.length;
             const hasConflicts = service.hasConflicts;
 
             let description = '';
             if (registrationCount > 0) {
-                description += `${registrationCount} registration${registrationCount > 1 ? 's' : ''}`;
+                description += `${registrationCount} reg${registrationCount > 1 ? 's' : ''}`;
             }
             if (injectionCount > 0) {
                 if (description) { description += ', '; }
@@ -623,6 +646,11 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
             );
 
             treeItem.iconPath = new vscode.ThemeIcon(icon);
+
+            // Add conflict indicator if service has conflicts
+            if (hasConflicts) {
+                treeItem.label = `${service.name} ⚠️`;
+            }
 
             // Log the service with its assigned symbol
             this.logger.debug(`Service created: ${service.name} [${icon}] (${lifetime})`, 'DINavigatorTreeProvider', {

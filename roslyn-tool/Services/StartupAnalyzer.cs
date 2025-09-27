@@ -70,81 +70,28 @@ public class StartupAnalyzer(IServiceRegistryAnalyzer sra) : IStartupAnalyzer
         try
         {
             var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+            var methodsWithDi = methods.Where(m =>
+                _sra.AnalyzeServiceRegistrations(m.ToString(), configuration.FilePath).Count != 0
+            ).ToList();
 
-            var configureServicesMethod = methods.FirstOrDefault(m =>
-                m.Identifier.Text.Equals("ConfigureServices", StringComparison.OrdinalIgnoreCase)
-            );
-
-            if (configureServicesMethod is not null)
+            if (methodsWithDi.Count != 0)
             {
-                configuration.LineNumber = configureServicesMethod
+                // Use the first method that contains DI registrations
+                var firstMethodWithDi = methodsWithDi.First();
+                configuration.LineNumber = firstMethodWithDi
                                         .GetLocation()
                                         .GetLineSpan().StartLinePosition.Line + 1;
-                var serviceRegistrations = _sra.AnalyzeServiceRegistrations(
-                                                configureServicesMethod.ToString(),
-                                                configuration.FilePath
-                                            );
-                configuration.ServiceRegistrations.AddRange(serviceRegistrations);
-            }
-            var allServiceRegistrations = _sra.AnalyzeServiceRegistrations(
-                                                root.ToString(),
-                                                configuration.FilePath
-                                            );
-            configuration.ServiceRegistrations.AddRange(allServiceRegistrations);
-        }
-        catch
-        {
-            throw;
-        }
-    }
-    private void AnalyzeProgramClass(
-        SyntaxNode root,
-        StartupConfiguration configuration
-    )
-    {
-        try
-        {
-            var sourceCode = root.ToString();
-            // Check for top-level statements (modern .NET 6+ approach)
-            var hasTopLevelStatements = HasTopLevelStatements(root);
+                var fnwExtension = Path.GetFileNameWithoutExtension(configuration.FilePath);
+                configuration.ConfigurationMethod = $"{fnwExtension}.{firstMethodWithDi.Identifier.Text}";
 
-            if (hasTopLevelStatements)
-            {
-                configuration.ConfigurationMethod = "Top-level Statements";
-                configuration.LineNumber = 1; // Top-level statements start at line 1
-
-                var registrations = _sra.AnalyzeServiceRegistrations(
-                    sourceCode, configuration.FilePath);
-                configuration.ServiceRegistrations.AddRange(registrations);
-            }
-            else if (sourceCode.Contains("var builder = WebApplication.CreateBuilder"))
-            {
-                configuration.ConfigurationMethod = "WebApplication.CreateBuilder";
-                var registrations = _sra.AnalyzeServiceRegistrations(
-                    sourceCode, configuration.FilePath);
-                configuration.ServiceRegistrations.AddRange(registrations);
-            }
-            else if (sourceCode.Contains("Host.CreateDefaultBuilder"))
-            {
-                configuration.ConfigurationMethod = "Host.CreateDefaultBuilder";
-                var registrations = _sra.AnalyzeServiceRegistrations(
-                    sourceCode, configuration.FilePath);
-                configuration.ServiceRegistrations.AddRange(registrations);
-            }
-            else if (sourceCode.Contains("ConfigureServices"))
-            {
-                configuration.ConfigurationMethod = "ConfigureServices";
-                var registrations = _sra.AnalyzeServiceRegistrations(
-                    sourceCode, configuration.FilePath);
-                configuration.ServiceRegistrations.AddRange(registrations);
-            }
-            else
-            {
-                // Traditional Program.Main or other patterns
-                configuration.ConfigurationMethod = "Program.Main";
-                var registrations = _sra.AnalyzeServiceRegistrations(
-                    sourceCode, configuration.FilePath);
-                configuration.ServiceRegistrations.AddRange(registrations);
+                foreach (var method in methodsWithDi)
+                {
+                    var serviceRegistrations = _sra.AnalyzeServiceRegistrations(
+                                                    method.ToString(),
+                                                    configuration.FilePath
+                                                );
+                    configuration.ServiceRegistrations.AddRange(serviceRegistrations);
+                }
             }
         }
         catch
@@ -152,26 +99,27 @@ public class StartupAnalyzer(IServiceRegistryAnalyzer sra) : IStartupAnalyzer
             throw;
         }
     }
-    private static bool HasTopLevelStatements(SyntaxNode root)
+    private void AnalyzeProgramClass(SyntaxNode root, StartupConfiguration config)
     {
         try
         {
-            var sourceCode = root.ToString();
-            var hasClassDeclaration = root.DescendantNodes()
-                .OfType<ClassDeclarationSyntax>()
-                .Any(c => c.Identifier.Text == "Program");
+            // Only analyze method bodies that contain DI registrations
+            var methodDeclarations = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+            var diMethods = methodDeclarations.Where(method =>
+                _sra.AnalyzeServiceRegistrations(method.ToString(), config.FilePath).Count > 0
+            );
 
-            var hasTopLevelBuilder = sourceCode.Contains("var builder = WebApplication.CreateBuilder") ||
-                                   sourceCode.Contains("var app = WebApplication.CreateBuilder") ||
-                                   sourceCode.Contains("WebApplication.CreateBuilder");
+            foreach (var method in diMethods)
+            {
+                var registrations = _sra.AnalyzeServiceRegistrations(method.ToString(), config.FilePath);
+                config.ServiceRegistrations.AddRange(registrations);
+            }
 
-            var hasTopLevelHost = sourceCode.Contains("Host.CreateDefaultBuilder");
-
-            return !hasClassDeclaration && (hasTopLevelBuilder || hasTopLevelHost);
+            config.ConfigurationMethod = "Program.Main";
         }
         catch
         {
-            return false;
+            throw;
         }
     }
     public List<CustomRegistry> DetectCustomRegistries(List<string> sourceFiles)
@@ -182,8 +130,24 @@ public class StartupAnalyzer(IServiceRegistryAnalyzer sra) : IStartupAnalyzer
             foreach (var file in sourceFiles)
             {
                 var sourceCode = File.ReadAllText(file);
-                var registries = _sra.DetectCustomRegistries(sourceCode, file);
-                customRegistries.AddRange(registries);
+                var tree = CSharpSyntaxTree.ParseText(sourceCode);
+                var root = tree.GetRoot();
+
+                // Only analyze class and method declarations, not the entire file
+                var classDeclarations = root.DescendantNodes().OfType<ClassDeclarationSyntax>();
+                var methodDeclarations = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+
+                foreach (var classDecl in classDeclarations)
+                {
+                    var registries = _sra.DetectCustomRegistries(classDecl.ToString(), file);
+                    customRegistries.AddRange(registries);
+                }
+
+                foreach (var methodDecl in methodDeclarations)
+                {
+                    var registries = _sra.DetectCustomRegistries(methodDecl.ToString(), file);
+                    customRegistries.AddRange(registries);
+                }
             }
         }
         catch
@@ -197,18 +161,59 @@ public class StartupAnalyzer(IServiceRegistryAnalyzer sra) : IStartupAnalyzer
         var allRegistrations = new List<ServiceRegistration>();
         try
         {
-            foreach (var file in sourceFiles)
+            // Separate startup files from other files
+            var startupFiles = sourceFiles.Where(f =>
+                Path.GetFileName(f).Equals("Program.cs", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(f).Equals("Startup.cs", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var otherFiles = sourceFiles.Except(startupFiles).ToList();
+            foreach (var file in startupFiles)
             {
                 var sourceCode = File.ReadAllText(file);
                 var registrations = _sra.AnalyzeServiceRegistrations(sourceCode, file);
                 allRegistrations.AddRange(registrations);
             }
 
-            // Deduplicate service registrations based on ServiceType, ImplementationType, and Lifetime
+            // Then, only analyze other files if they contain service registration methods
+            // that are actually called from startup files
+            foreach (var file in otherFiles)
+            {
+                var sourceCode = File.ReadAllText(file);
+                // Check if this file contains service registration methods
+                var hasServiceRegistrations = _sra.AnalyzeServiceRegistrations(sourceCode, file).Count != 0;
+
+                if (hasServiceRegistrations)
+                {
+                    // Only include registrations from this file if it's actually referenced
+                    // from a startup file (basic check for method calls)
+                    var fileName = Path.GetFileNameWithoutExtension(file);
+                    var isReferenced = startupFiles.Any(startupFile =>
+                    {
+                        var startupContent = File.ReadAllText(startupFile);
+                        return startupContent.Contains(fileName) ||
+                               startupContent.Contains("Add") && startupContent.Contains(fileName);
+                    });
+
+                    if (isReferenced)
+                    {
+                        var registrations = _sra.AnalyzeServiceRegistrations(sourceCode, file);
+                        allRegistrations.AddRange(registrations);
+                    }
+                }
+            }
+
+            // Prioritize registrations from Program.cs over other files
+            // and deduplicate based on ServiceType, ImplementationType, and Lifetime
             var uniqueRegistrations = new List<ServiceRegistration>();
             var seenRegistrations = new HashSet<string>();
 
-            foreach (var registration in allRegistrations)
+            // Sort registrations to prioritize Program.cs files
+            var sortedRegistrations = allRegistrations
+                .OrderByDescending(r => r.FilePath.Contains("Program.cs") ? 1 : 0)
+                .ToList();
+
+            foreach (var registration in sortedRegistrations)
             {
                 // Create a unique key based on service type, implementation type, and lifetime
                 var key = $"{registration.ServiceType}:{registration.ImplementationType}:{registration.Lifetime}";

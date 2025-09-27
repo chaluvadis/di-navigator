@@ -56,10 +56,21 @@ export class RoslynToolService {
                 }
             }
 
-            for (const [lifetime, services] of Array.from(lifetimeMap.entries())) {
+            // Sort service groups by lifetime priority
+            const lifetimeOrder = { 'Scoped': 0, 'Singleton': 1, 'Transient': 2, 'Others': 3 };
+            const sortedEntries = Array.from(lifetimeMap.entries()).sort((a, b) => {
+                const orderA = lifetimeOrder[a[0] as keyof typeof lifetimeOrder] ?? 999;
+                const orderB = lifetimeOrder[b[0] as keyof typeof lifetimeOrder] ?? 999;
+                return orderA - orderB;
+            });
+
+            for (const [lifetime, services] of sortedEntries) {
+                // Sort services within each group alphabetically
+                const sortedServices = services.sort((a: Service, b: Service) => a.name.localeCompare(b.name));
+
                 serviceGroups.push({
                     lifetime: lifetime as Lifetime,
-                    services,
+                    services: sortedServices,
                     color: this.getLifetimeColor(lifetime as Lifetime),
                     count: services.length
                 });

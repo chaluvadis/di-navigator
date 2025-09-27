@@ -73,13 +73,13 @@ public record ParsedSolution
     public bool IsSlnx { get; set; } = false;
 }
 
-public record SolutionInfo
+public record ParsedSolutionInfo
 {
     public string SolutionPath { get; set; } = string.Empty;
     public string SolutionName { get; set; } = string.Empty;
-    public List<ProjectInfo> Projects { get; set; } = [];
+    public List<ParsedProjectInfo> Projects { get; set; } = [];
 }
-public record ProjectInfo
+public record ParsedProjectInfo
 {
     public string Name { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;

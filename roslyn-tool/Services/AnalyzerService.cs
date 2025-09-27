@@ -59,7 +59,7 @@ public class AnalyzerService(
                     var projectPath = csprojFiles[0];
                     var projectName = Path.GetFileNameWithoutExtension(projectPath);
 
-                    var projectInfo = new Models.ProjectInfo
+                    var projectInfo = new ParsedProjectInfo
                     {
                         Name = projectName,
                         Path = projectPath,
@@ -170,7 +170,7 @@ public class AnalyzerService(
         return analysisResult;
     }
 
-    private async Task<ProjectAnalysis?> AnalyzeProjectAsync(Models.ProjectInfo projectInfo)
+    private async Task<ProjectAnalysis?> AnalyzeProjectAsync(ParsedProjectInfo projectInfo)
     {
         return await Task.Run(() =>
         {

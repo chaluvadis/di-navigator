@@ -2,42 +2,31 @@ namespace DIServiceAnalyzer.Services;
 
 public class SolutionParser(string baseDirectory)
 {
-    private readonly string _baseDirectory = baseDirectory ?? throw new ArgumentNullException(nameof(baseDirectory));
-    private readonly Dictionary<string, string> _projectTypeCache = [];
+    private readonly string _baseDirectory =
+            baseDirectory ?? throw new ArgumentNullException(nameof(baseDirectory));
 
     public List<ParsedSolution> DiscoverSolutions()
     {
         var solutions = new List<ParsedSolution>();
         try
         {
-            // Use parallel processing to discover files faster
-            var slnFiles = Directory.GetFiles(_baseDirectory, "*.sln", SearchOption.AllDirectories);
-            var slnxFiles = Directory.GetFiles(_baseDirectory, "*.slnx", SearchOption.AllDirectories);
+            // Get all solution files in a single operation
+            var allSolutionFiles = Directory.GetFiles(_baseDirectory, "*.sln", SearchOption.AllDirectories)
+                .Concat(Directory.GetFiles(_baseDirectory, "*.slnx", SearchOption.AllDirectories))
+                .ToList();
 
             // Group files by directory to handle migration scenarios
             var filesByDirectory = new Dictionary<string, List<string>>();
 
-            // Process .sln files in parallel
-            Parallel.ForEach(slnFiles, slnFile =>
+            // Process all solution files in a single parallel loop
+            Parallel.ForEach(allSolutionFiles, solutionFile =>
             {
-                var directory = Path.GetDirectoryName(slnFile) ?? string.Empty;
+                var directory = Path.GetDirectoryName(solutionFile) ?? string.Empty;
                 lock (filesByDirectory)
                 {
                     if (!filesByDirectory.ContainsKey(directory))
                         filesByDirectory[directory] = [];
-                    filesByDirectory[directory].Add(slnFile);
-                }
-            });
-
-            // Process .slnx files in parallel
-            Parallel.ForEach(slnxFiles, slnxFile =>
-            {
-                var directory = Path.GetDirectoryName(slnxFile) ?? string.Empty;
-                lock (filesByDirectory)
-                {
-                    if (!filesByDirectory.ContainsKey(directory))
-                        filesByDirectory[directory] = [];
-                    filesByDirectory[directory].Add(slnxFile);
+                    filesByDirectory[directory].Add(solutionFile);
                 }
             });
 
@@ -47,16 +36,15 @@ public class SolutionParser(string baseDirectory)
                 var hasSlnx = directoryFiles.Any(f => f.EndsWith(".slnx"));
                 var hasSln = directoryFiles.Any(f => f.EndsWith(".sln"));
 
-                if (hasSlnx)
+                var slnFiles = hasSlnx
+                    ? directoryFiles.Where(f => f.EndsWith(".slnx"))
+                    : directoryFiles.Where(f => f.EndsWith(".sln"));
+
+                solutions.AddRange(slnFiles.Select(f => new ParsedSolution
                 {
-                    var solutionFiles = directoryFiles.Where(f => f.EndsWith(".slnx"));
-                    solutions.AddRange(solutionFiles.Select(f => new ParsedSolution { SolutionName = f, IsSlnx = true }));
-                }
-                else if (hasSln)
-                {
-                    var solutionFiles = directoryFiles.Where(f => f.EndsWith(".sln"));
-                    solutions.AddRange(solutionFiles.Select(f => new ParsedSolution { SolutionName = f, IsSlnx = false }));
-                }
+                    SolutionName = f,
+                    IsSlnx = hasSlnx
+                }));
             }
         }
         catch
@@ -65,14 +53,14 @@ public class SolutionParser(string baseDirectory)
         }
         return solutions;
     }
-    public Models.SolutionInfo ParseSolution(string solutionPath)
+    public ParsedSolutionInfo ParseSolution(string solutionPath)
     {
         if (!File.Exists(solutionPath))
         {
             throw new FileNotFoundException($"Solution file not found: {solutionPath}");
         }
 
-        var solution = new Models.SolutionInfo
+        var solution = new ParsedSolutionInfo
         {
             SolutionPath = solutionPath,
             SolutionName = Path.GetFileNameWithoutExtension(solutionPath),
@@ -97,55 +85,7 @@ public class SolutionParser(string baseDirectory)
 
         return solution;
     }
-    private void ParseSlnxFile(string solutionPath, Models.SolutionInfo solution)
-    {
-        try
-        {
-            var doc = new XmlDocument();
-            doc.Load(solutionPath);
-
-            var solutionDir = Path.GetDirectoryName(solutionPath) ?? string.Empty;
-
-            // Parse projects from .slnx XML format
-            // .slnx files have the structure: <Solution><Folder><Project Path="..." /></Folder></Solution>
-            var projectNodes = doc.SelectNodes("//Project");
-            if (projectNodes != null)
-            {
-                foreach (XmlNode projectNode in projectNodes)
-                {
-                    var projectPath = projectNode.Attributes?["Path"]?.Value;
-                    if (!string.IsNullOrEmpty(projectPath) && projectPath.EndsWith(".csproj"))
-                    {
-                        var projectName = Path.GetFileNameWithoutExtension(projectPath);
-
-                        // Make path absolute if it's relative
-                        if (!Path.IsPathRooted(projectPath))
-                        {
-                            projectPath = Path.Combine(solutionDir, projectPath);
-                        }
-
-                        // Normalize path separators (handle both / and \)
-                        projectPath = projectPath.Replace('/', Path.DirectorySeparatorChar);
-
-                        var projectInfo = new Models.ProjectInfo
-                        {
-                            Name = projectName,
-                            Path = projectPath,
-                            Type = DetermineProjectType(projectPath)
-                        };
-
-                        solution.Projects.Add(projectInfo);
-                    }
-                }
-            }
-        }
-        catch
-        {
-            throw;
-        }
-    }
-
-    private void ParseSlnFile(string solutionPath, Models.SolutionInfo solution)
+    private void ParseSlnFile(string solutionPath, ParsedSolutionInfo solution)
     {
         try
         {
@@ -176,8 +116,52 @@ public class SolutionParser(string baseDirectory)
             throw;
         }
     }
+    private static void ParseSlnxFile(string solutionPath, ParsedSolutionInfo solution)
+    {
+        try
+        {
+            var doc = new XmlDocument();
+            doc.Load(solutionPath);
 
-    private Models.ProjectInfo? ParseProjectLine(string line)
+            var solutionDir = Path.GetDirectoryName(solutionPath) ?? string.Empty;
+            // .slnx files have the structure: <Solution><Folder><Project Path="..." /></Folder></Solution>
+            var projectNodes = doc.SelectNodes("//Project");
+            if (projectNodes != null)
+            {
+                foreach (XmlNode projectNode in projectNodes)
+                {
+                    var projectPath = projectNode.Attributes?["Path"]?.Value;
+                    if (!string.IsNullOrEmpty(projectPath) && projectPath.EndsWith(".csproj"))
+                    {
+                        var projectName = Path.GetFileNameWithoutExtension(projectPath);
+
+                        // Make path absolute if it's relative
+                        if (!Path.IsPathRooted(projectPath))
+                        {
+                            projectPath = Path.Combine(solutionDir, projectPath);
+                        }
+
+                        // Normalize path separators (handle both / and \)
+                        projectPath = projectPath.Replace('/', Path.DirectorySeparatorChar);
+
+                        var projectInfo = new ParsedProjectInfo
+                        {
+                            Name = projectName,
+                            Path = projectPath,
+                            Type = DetermineProjectType(projectPath)
+                        };
+
+                        solution.Projects.Add(projectInfo);
+                    }
+                }
+            }
+        }
+        catch
+        {
+            throw;
+        }
+    }
+    private ParsedProjectInfo? ParseProjectLine(string line)
     {
         try
         {
@@ -193,7 +177,7 @@ public class SolutionParser(string baseDirectory)
                     var solutionDir = Path.GetDirectoryName(_baseDirectory) ?? string.Empty;
                     projectPath = Path.Combine(solutionDir, projectPath);
                 }
-                return new Models.ProjectInfo
+                return new ParsedProjectInfo
                 {
                     Name = projectName,
                     Path = projectPath,
@@ -207,62 +191,69 @@ public class SolutionParser(string baseDirectory)
         }
         return null;
     }
-    private string DetermineProjectType(string projectPath)
+    private static string DetermineProjectType(string projectPath)
     {
-        // Use caching to avoid repeated file system operations
-        if (_projectTypeCache.TryGetValue(projectPath, out var cachedType))
-        {
-            return cachedType;
-        }
+        return GetProjectTypeFromCsproj(projectPath);
+    }
+    private static string GetProjectTypeFromCsproj(string projectPath)
+    {
+        var (projectDir, projectName) = GetProjectDirAndName(projectPath);
+        if (projectDir == null || projectName == null)
+            return "Unknown";
+
+        var csprojPath = Path.Combine(projectDir, $"{projectName}.csproj");
+        if (!File.Exists(csprojPath))
+            return "Unknown";
 
         try
         {
-            var projectDir = Path.GetDirectoryName(projectPath) ?? string.Empty;
-            var projectName = Path.GetFileNameWithoutExtension(projectPath);
-
-            // Check for common ASP.NET Core patterns
-            if (Directory.GetFiles(projectDir, "appsettings*.json", SearchOption.TopDirectoryOnly).Length != 0)
-            {
-                _projectTypeCache[projectPath] = "ASP.NET Core Application";
-                return "ASP.NET Core Application";
-            }
-
-            if (projectName.EndsWith(".Web") || projectName.EndsWith(".Api"))
-            {
-                _projectTypeCache[projectPath] = "ASP.NET Core Web Application";
-                return "ASP.NET Core Web Application";
-            }
-
-            if (projectName.EndsWith(".Test") || projectName.EndsWith(".Tests"))
-            {
-                _projectTypeCache[projectPath] = "Test Project";
-                return "Test Project";
-            }
-
-            // Check project file for output type
-            var csprojPath = Path.Combine(projectDir, projectName + ".csproj");
-            if (File.Exists(csprojPath))
-            {
-                var csprojContent = File.ReadAllText(csprojPath);
-                if (csprojContent.Contains("<OutputType>Exe</OutputType>"))
-                {
-                    _projectTypeCache[projectPath] = "Console Application";
-                    return "Console Application";
-                }
-                if (csprojContent.Contains("<OutputType>Library</OutputType>"))
-                {
-                    _projectTypeCache[projectPath] = "Class Library";
-                    return "Class Library";
-                }
-            }
-
-            _projectTypeCache[projectPath] = "Unknown";
-            return "Unknown";
+            var csprojContent = File.ReadAllText(csprojPath);
+            return AnalyzeProjectContent(csprojContent);
         }
         catch
         {
-            _projectTypeCache[projectPath] = "Unknown";
             return "Unknown";
         }
+    }
+    private static (string? projectDir, string? projectName) GetProjectDirAndName(string projectPath)
+    {
+        var projectDir = Path.GetDirectoryName(projectPath);
+        var projectName = Path.GetFileNameWithoutExtension(projectPath);
+        return (projectDir, projectName);
+    }
+    private static string AnalyzeProjectContent(string csprojContent)
+    {
+        var contentUpper = csprojContent.ToUpperInvariant();
+
+        // Use dictionary lookup for better performance
+        var projectTypePatterns = new Dictionary<string, string>
+        {
+            // ASP.NET Core patterns
+            ["MICROSOFT.NET.SDK.WEB"] = "ASP.NET Core Web Application",
+            ["MICROSOFT.ASPNETCORE"] = "ASP.NET Core Web Application",
+            ["SWASHBUCKLE.ASPNETCORE"] = "ASP.NET Core Web Application",
+
+            // Test project patterns
+            ["MICROSOFT.NET.SDK.TEST"] = "Test Project",
+            ["MICROSOFT.NET.TEST.SDK"] = "Test Project",
+            ["XUNIT"] = "Test Project",
+            ["NUNIT"] = "Test Project",
+            ["MSTEST"] = "Test Project",
+
+            // Output type patterns
+            ["<OUTPUTTYPE>EXE</OUTPUTTYPE>"] = "Console Application",
+            ["<OUTPUTTYPE>LIBRARY</OUTPUTTYPE>"] = "Class Library"
+        };
+
+        // Single pass through patterns for better performance
+        foreach (var (pattern, projectType) in projectTypePatterns)
+        {
+            if (contentUpper.Contains(pattern))
+            {
+                return projectType;
+            }
+        }
+
+        return "Unknown";
     }
 }
