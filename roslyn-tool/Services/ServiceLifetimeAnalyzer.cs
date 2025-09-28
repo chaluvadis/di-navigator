@@ -1,8 +1,12 @@
 namespace DIServiceAnalyzer.Services;
 
-public class ServiceLifetimeAnalyzer(ILogger logger) : IServiceLifetimeAnalyzer
+public class ServiceLifetimeAnalyzer(
+    ILogger logger,
+    IConstructorAnalyzer constructorAnalyzer
+) : IServiceLifetimeAnalyzer
 {
     private readonly ILogger _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly IConstructorAnalyzer _constructorAnalyzer = constructorAnalyzer ?? throw new ArgumentNullException(nameof(constructorAnalyzer));
     public List<ServiceLifetimeConflict> AnalyzeLifetimeConflicts(List<ProjectAnalysis> projects)
     {
         var conflicts = new List<ServiceLifetimeConflict>();
@@ -132,7 +136,7 @@ public class ServiceLifetimeAnalyzer(ILogger logger) : IServiceLifetimeAnalyzer
                             ImplementationType = transientReg.ImplementationType,
                             CurrentLifetime = transientReg.Lifetime,
                             RecommendedLifetime = ServiceScope.Scoped,
-                            ConflictReason = $"High number of Transient registrations (${transientRegistrations.Count()}). Consider using Scoped for frequently used services.",
+                            ConflictReason = $"High number of Transient registrations ({transientRegistrations.Count()}). Consider using Scoped for frequently used services.",
                             FilePath = transientReg.FilePath,
                             LineNumber = transientReg.LineNumber,
                             Severity = ConflictSeverity.Low
@@ -155,7 +159,7 @@ public class ServiceLifetimeAnalyzer(ILogger logger) : IServiceLifetimeAnalyzer
                             ImplementationType = transientReg.ImplementationType,
                             CurrentLifetime = transientReg.Lifetime,
                             RecommendedLifetime = ServiceScope.Scoped,
-                            ConflictReason = $"Multiple Transient registrations detected (${transientRegistrations.Count()}). Consider using Scoped for frequently used services.",
+                            ConflictReason = $"Multiple Transient registrations detected ({transientRegistrations.Count()}). Consider using Scoped for frequently used services.",
                             FilePath = transientReg.FilePath,
                             LineNumber = transientReg.LineNumber,
                             Severity = ConflictSeverity.Medium
@@ -198,27 +202,180 @@ public class ServiceLifetimeAnalyzer(ILogger logger) : IServiceLifetimeAnalyzer
         return issues;
     }
 
-    public List<ServiceLifetimeConflict> AnalyzeMissingRegistrations(List<ProjectAnalysis> projects)
+    public List<MissingRegistration> AnalyzeMissingRegistrations(List<ProjectAnalysis> projects)
     {
-        var conflicts = new List<ServiceLifetimeConflict>();
+        var missingRegistrations = new List<MissingRegistration>();
 
         foreach (var project in projects)
         {
-            // This is a placeholder for missing registration detection
-            // In a real implementation, this would analyze constructor injection
-            // and compare with available registrations
+            try
+            {
+                _logger.LogInfo($"Analyzing missing registrations for project: {project.ProjectName}");
 
-            // For now, we'll add a method signature for future implementation
-            _logger.LogInfo($"Analyzing missing registrations for project: {project.ProjectName}");
+                // Get all source files from the project
+                var sourceFiles = GetSourceFilesFromProject(project);
+                if (!sourceFiles.Any())
+                {
+                    continue;
+                }
 
-            // TODO: Implement missing registration detection
-            // - Analyze constructor parameters
-            // - Check if services are registered
-            // - Identify missing registrations
-            // - Suggest appropriate lifetimes
+                // Analyze constructor injections across all source files
+                var injectedDependencies = new List<InjectedDependency>();
+                foreach (var sourceFile in sourceFiles)
+                {
+                    try
+                    {
+                        var sourceCode = File.ReadAllText(sourceFile);
+                        var constructorAnalyses = _constructorAnalyzer.AnalyzeConstructorInjections(sourceCode, sourceFile);
+
+                        foreach (var analysis in constructorAnalyses)
+                        {
+                            foreach (var parameter in analysis.Parameters.Where(p => p.IsDependencyInjection))
+                            {
+                                injectedDependencies.Add(new InjectedDependency
+                                {
+                                    ServiceType = parameter.TypeName,
+                                    FilePath = sourceFile,
+                                    LineNumber = parameter.LineNumber,
+                                    ClassName = analysis.ClassName,
+                                    MemberName = analysis.ClassName, // Constructor name
+                                    Context = InjectionContext.Constructor
+                                });
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning($"Failed to analyze file {sourceFile}: {ex.Message}");
+                    }
+                }
+
+                // Find missing registrations
+                var missing = FindMissingRegistrations(injectedDependencies, project.ServiceRegistrations);
+                missingRegistrations.AddRange(missing);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error analyzing missing registrations for project {project.ProjectName}: {ex.Message}");
+            }
         }
 
-        return conflicts;
+        return missingRegistrations;
+    }
+
+    private List<string> GetSourceFilesFromProject(ProjectAnalysis project)
+    {
+        var sourceFiles = new List<string>();
+
+        // For now, we'll use a simple approach to find C# files
+        // In a real implementation, this would use the ProjectAnalyzer service
+        if (Directory.Exists(Path.GetDirectoryName(project.ProjectPath)))
+        {
+            var projectDir = Path.GetDirectoryName(project.ProjectPath) ?? string.Empty;
+            sourceFiles.AddRange(Directory.GetFiles(projectDir, "*.cs", SearchOption.AllDirectories));
+        }
+
+        return sourceFiles;
+    }
+
+    private List<MissingRegistration> FindMissingRegistrations(
+        List<InjectedDependency> injectedDependencies,
+        List<ServiceRegistration> registeredServices)
+    {
+        var missingRegistrations = new List<MissingRegistration>();
+
+        // Group injected dependencies by service type
+        var dependencyGroups = injectedDependencies
+            .GroupBy(dep => dep.ServiceType)
+            .Where(group => group.Key != null && !string.IsNullOrEmpty(group.Key));
+
+        foreach (var dependencyGroup in dependencyGroups)
+        {
+            var serviceType = dependencyGroup.Key;
+
+            // Check if this service type is registered
+            var matchingRegistration = registeredServices.FirstOrDefault(reg =>
+                ServiceTypeMatches(reg.ServiceType, serviceType) ||
+                ServiceTypeMatches(reg.ImplementationType, serviceType));
+
+            if (matchingRegistration == null)
+            {
+                // Service is injected but not registered
+                missingRegistrations.Add(new MissingRegistration
+                {
+                    ServiceType = serviceType,
+                    SuggestedLifetime = SuggestLifetimeForService(serviceType, dependencyGroup.ToList()),
+                    Reason = $"Service '{serviceType}' is injected in {dependencyGroup.Count()} location(s) but not registered",
+                    InjectionLocations = dependencyGroup.Select(dep => new InjectionLocation
+                    {
+                        FilePath = dep.FilePath,
+                        LineNumber = dep.LineNumber,
+                        ClassName = dep.ClassName,
+                        MemberName = dep.MemberName,
+                        Context = dep.Context
+                    }).ToList()
+                });
+            }
+        }
+
+        return missingRegistrations;
+    }
+
+    private static bool ServiceTypeMatches(string registeredType, string injectedType)
+    {
+        if (string.IsNullOrEmpty(registeredType) || string.IsNullOrEmpty(injectedType))
+            return false;
+
+        // Exact match
+        if (registeredType == injectedType)
+            return true;
+
+        // Interface/implementation matching
+        if (injectedType.StartsWith("I") && injectedType.Length > 1)
+        {
+            var implementationName = injectedType.Substring(1);
+            return registeredType.EndsWith(implementationName);
+        }
+
+        if (registeredType.StartsWith("I") && registeredType.Length > 1)
+        {
+            var interfaceName = registeredType.Substring(1);
+            return injectedType.EndsWith(interfaceName);
+        }
+
+        return false;
+    }
+
+    private static ServiceScope SuggestLifetimeForService(string serviceType, List<InjectedDependency> dependencies)
+    {
+        // Analyze usage patterns to suggest appropriate lifetime
+
+        // If service is injected into many different classes, suggest Singleton
+        if (dependencies.Count > 5)
+        {
+            return ServiceScope.Singleton;
+        }
+
+        // If service maintains state or is expensive to create, suggest Scoped
+        if (IsStatefulService(serviceType) || IsExpensiveToCreate(serviceType))
+        {
+            return ServiceScope.Scoped;
+        }
+
+        // Default to Transient for simple services
+        return ServiceScope.Transient;
+    }
+
+    private static bool IsStatefulService(string serviceType)
+    {
+        var statefulPatterns = new[] { "Cache", "Session", "State", "Context", "Configuration" };
+        return statefulPatterns.Any(pattern => serviceType.Contains(pattern));
+    }
+
+    private static bool IsExpensiveToCreate(string serviceType)
+    {
+        var expensivePatterns = new[] { "Database", "HttpClient", "Repository", "Client", "Connection" };
+        return expensivePatterns.Any(pattern => serviceType.Contains(pattern));
     }
 
     private static int GetLifetimePriority(ServiceScope lifetime) => lifetime switch

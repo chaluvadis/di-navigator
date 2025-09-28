@@ -43,10 +43,10 @@ public class AnalyzerService(
 
             // Create SolutionParser with the specified input directory
             var solutionParser = new SolutionParser(inputDirectory);
-            var disconveredSolutions = solutionParser.DiscoverSolutions();
+            var discoveredSolutions = solutionParser.DiscoverSolutions();
 
             // If no solutions found, check if the input is a specific solution file
-            if (disconveredSolutions.Count == 0)
+            if (discoveredSolutions.Count == 0)
             {
                 var solutionFile = Path.Combine(inputDirectory, Path.GetFileName(inputDirectory));
                 if (File.Exists(solutionFile) && (solutionFile.EndsWith(".sln") || solutionFile.EndsWith(".slnx")))
@@ -99,7 +99,7 @@ public class AnalyzerService(
 
             var solutionCount = 0;
             // Process solutions in parallel for better performance
-            await Parallel.ForEachAsync(disconveredSolutions, async (solution, cancellationToken) =>
+            await Parallel.ForEachAsync(discoveredSolutions, async (solution, cancellationToken) =>
             {
                 var solutionPath = solution.SolutionName;
                 Interlocked.Increment(ref solutionCount);

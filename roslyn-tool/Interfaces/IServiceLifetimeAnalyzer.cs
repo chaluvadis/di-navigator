@@ -1,11 +1,10 @@
-using DIServiceAnalyzer.Models;
-
 namespace DIServiceAnalyzer.Interfaces;
 
 public interface IServiceLifetimeAnalyzer
 {
     List<ServiceLifetimeConflict> AnalyzeLifetimeConflicts(List<ProjectAnalysis> projects);
     List<ServiceDependencyIssue> AnalyzeServiceDependencies(List<ProjectAnalysis> projects);
+    List<MissingRegistration> AnalyzeMissingRegistrations(List<ProjectAnalysis> projects);
 }
 
 public record ServiceLifetimeConflict

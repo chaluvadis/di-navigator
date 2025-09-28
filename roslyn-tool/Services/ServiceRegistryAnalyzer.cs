@@ -72,8 +72,12 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
 
             if (hasLambdaExpression || implementationType == "FactoryMethod")
             {
+                // For lambda expressions, try to extract the actual service type from the first argument
+                var firstArgType = ExtractTypeFromExpression(firstArg.Expression);
+                var lambdaServiceType = !string.IsNullOrEmpty(firstArgType) ? firstArgType : methodName;
+
                 return CreateServiceRegistration(
-                    methodName, methodName, lifetime, methodName, filePath, lineNumber);
+                    lambdaServiceType, methodName, lifetime, methodName, filePath, lineNumber);
             }
 
             // If serviceType is empty (e.g., from builder.Configuration), use method name for service identification
@@ -91,8 +95,13 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                 HasNestedLambdaExpression(firstArgument.Expression) ||
                 firstArgument.Expression.ToString().Contains("=>"))
             {
+                // For single argument lambda expressions, the service type is typically the method name
+                // but we can try to extract more specific information from the lambda
+                var lambdaServiceType = ExtractServiceTypeFromLambda(firstArgument.Expression);
+                var finalServiceType = !string.IsNullOrEmpty(lambdaServiceType) ? lambdaServiceType : methodName;
+
                 return CreateServiceRegistration(
-                    methodName, methodName, lifetime, methodName, filePath, lineNumber);
+                    finalServiceType, methodName, lifetime, methodName, filePath, lineNumber);
             }
 
             if (!string.IsNullOrEmpty(serviceType))
@@ -129,29 +138,27 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             }
 
             // Enhanced fallback: try to extract from the expression's string representation
-            var expressionText = invocation.Expression.ToString();
+            var expressionText = invocation.ToString();
 
             if (!string.IsNullOrEmpty(expressionText))
             {
-                // For complex expressions, try to find the actual method call
-                // Look for patterns like "services.AddMethodName(" or "builder.Services.AddMethodName("
-                var methodCallPatterns = new[]
+                // For expressions with lambda arguments, we need to extract the method name
+                // before the lambda starts. Lambda expressions typically start with '(' or identifier =>
+                var lambdaStartPatterns = new[]
                 {
-                    @"\.(\w+)\s*\(",  // Matches "services.AddMethodName("
-                    @"(\w+)\s*\(",     // Matches "AddMethodName(" at start
+                    @"\s*\w+\s*=>",  // Matches "param =>" patterns
+                    @"\s*\(",        // Matches opening parenthesis for lambda parameters
                 };
 
-                foreach (var pattern in methodCallPatterns)
+                // Find the method name by looking before any lambda expressions
+                var methodName = ExtractMethodNameFromExpression(expressionText, lambdaStartPatterns);
+
+                if (!string.IsNullOrEmpty(methodName))
                 {
-                    var match = Regex.Match(expressionText, pattern);
-                    if (match.Success)
+                    // Validate that this looks like a method name (starts with Add/TryAdd)
+                    if (methodName.StartsWith("Add") || methodName.StartsWith("TryAdd"))
                     {
-                        var extracted = match.Groups[1].Value;
-                        // Validate that this looks like a method name (starts with Add/TryAdd)
-                        if (extracted.StartsWith("Add") || extracted.StartsWith("TryAdd"))
-                        {
-                            return extracted;
-                        }
+                        return methodName;
                     }
                 }
 
@@ -159,10 +166,48 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                 var lastDotIndex = expressionText.LastIndexOf('.');
                 if (lastDotIndex >= 0 && lastDotIndex < expressionText.Length - 1)
                 {
-                    return expressionText[(lastDotIndex + 1)..];
+                    var fallbackName = expressionText[(lastDotIndex + 1)..];
+                    // Clean up the fallback name by removing everything after '(' or ' ' (for lambda cases)
+                    var cleanName = fallbackName.Split('(', ' ', '<')[0];
+                    return cleanName;
                 }
 
                 return expressionText;
+            }
+
+            return string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string ExtractMethodNameFromExpression(string expressionText, string[] lambdaStartPatterns)
+    {
+        try
+        {
+            var methodCallPatterns = new[]
+            {
+                @"\.(\w+)\s*\(",  // Matches "services.AddMethodName("
+                @"(\w+)\s*\(",     // Matches "AddMethodName(" at start
+            };
+
+            foreach (var pattern in methodCallPatterns)
+            {
+                var match = Regex.Match(expressionText, pattern);
+                if (match.Success)
+                {
+                    var extracted = match.Groups[1].Value;
+                    var remainingText = expressionText[(match.Index + match.Length)..];
+                    bool hasLambdaAfter = lambdaStartPatterns.Any(pattern =>
+                        Regex.Match(remainingText, pattern).Success);
+
+                    if (hasLambdaAfter || extracted.StartsWith("Add"))
+                    {
+                        return extracted;
+                    }
+                }
             }
 
             return string.Empty;
@@ -188,10 +233,6 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                     if (IsServiceCollectionExpression(memberAccess.Expression))
                     {
                         invocations.Add(invocation);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"DEBUG: Not a service collection expression: {memberAccess.Expression}");
                     }
                 }
             }
@@ -475,6 +516,44 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
     {
         var lambdaExpressions = expression.DescendantNodes().OfType<LambdaExpressionSyntax>();
         return lambdaExpressions.Any();
+    }
+
+    private static string ExtractServiceTypeFromLambda(ExpressionSyntax lambdaExpression)
+    {
+        try
+        {
+            var lambdaText = lambdaExpression.ToString();
+            if (lambdaText.Contains('=') && lambdaText.Contains("=>"))
+            {
+                return string.Empty;
+            }
+
+            // For more complex lambdas, try to extract type information
+            if (lambdaExpression is LambdaExpressionSyntax lambda)
+            {
+                // Look for object creation or type references in the lambda body
+                var objectCreations = lambda.Body.DescendantNodes().OfType<ObjectCreationExpressionSyntax>();
+                if (objectCreations.Any())
+                {
+                    return objectCreations.First().Type.ToString();
+                }
+
+                // Look for type references
+                var typeRefs = lambda.Body.DescendantNodes()
+                    .OfType<TypeSyntax>()
+                    .Where(t => !t.ToString().Contains("System") && !t.ToString().Contains("Microsoft"));
+                if (typeRefs.Any())
+                {
+                    return typeRefs.First().ToString();
+                }
+            }
+
+            return string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     private static string ExtractNamespace(string filePath)

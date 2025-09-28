@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
-using Quartz;
 
-public class LambdaTest
+public class LambdaExpressionTest
 {
     public void ConfigureServices(IServiceCollection services)
     {
@@ -20,11 +19,11 @@ public class LambdaTest
         services.AddTransient<IUserService, UserService>();
 
         // Test case 4: Factory method registration (should still work)
-        services.AddTransient<IService>(sp => new Service());
+        services.AddTransient<IDataService>(sp => new DataService());
     }
 }
 
 public interface IUserService { }
 public class UserService : IUserService { }
-public interface IService { }
-public class Service : IService { }
+public interface IDataService { }
+public class DataService : IDataService { }

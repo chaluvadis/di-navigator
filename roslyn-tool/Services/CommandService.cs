@@ -1,4 +1,3 @@
-using System.Text.Json;
 namespace DIServiceAnalyzer.Services;
 
 public class CommandService(IAnalyzerService analyzerService) : ICommandService

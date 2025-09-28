@@ -1,5 +1,3 @@
-using DIServiceAnalyzer.Interfaces;
-
 namespace DIServiceAnalyzer.Services;
 
 public class ConsoleLogger(LogLevel minLevel = LogLevel.Info) : ILogger, IDisposable

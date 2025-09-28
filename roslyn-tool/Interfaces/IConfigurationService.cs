@@ -1,5 +1,3 @@
-using DIServiceAnalyzer.Models;
-
 namespace DIServiceAnalyzer.Interfaces;
 
 public interface IConfigurationService
