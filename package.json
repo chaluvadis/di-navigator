@@ -3,7 +3,7 @@
   "displayName": "DI Navigator",
   "description": "Advanced dependency injection analysis and visualization for .NET projects",
   "version": "2.0.0",
-  "publisher": "di-navigator",
+  "publisher": "nomad-in-code",
   "icon": "./icon.png",
   "license": "MIT",
   "repository": {
@@ -39,6 +39,11 @@
       {
         "command": "di-navigator.analyzeProject",
         "title": "Analyze Project",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.analyzeSolution",
+        "title": "Analyze Solution",
         "category": "DI Navigator"
       },
       {
@@ -115,8 +120,13 @@
     "menus": {
       "explorer/context": [
         {
-          "when": "resourceExtname == .csproj || resourceExtname == .sln || resourceExtname == .slnx",
+          "when": "resourceExtname == .csproj",
           "command": "di-navigator.analyzeProject",
+          "group": "di-navigator"
+        },
+        {
+          "when": "resourceExtname == .sln || resourceExtname == .slnx",
+          "command": "di-navigator.analyzeSolution",
           "group": "di-navigator"
         }
       ],
@@ -142,7 +152,7 @@
         {
           "id": "di-navigator",
           "title": "DI Navigator",
-          "icon": "./icon.png"
+          "icon": "./extension-icon.png"
         }
       ]
     },

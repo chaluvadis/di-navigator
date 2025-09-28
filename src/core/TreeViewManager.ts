@@ -8,22 +8,72 @@ export class TreeViewManager {
     private treeDataProvider: DINavigatorTreeProvider | null = null;
     private treeView: vscode.TreeView<DINavigatorTreeItem> | null = null;
     private currentAnalysisData: WorkspaceAnalysis | null = null;
+    private currentWorkspaceFolder: string | null = null;
 
     constructor(context: vscode.ExtensionContext, logger: Logger) {
         this.context = context;
         this.logger = logger;
+        this.updateCurrentWorkspace();
     }
     public getServiceIcon(lifetime: string): string {
-        let lt = lifetime.toLowerCase().trim();
+        let lt = lifetime?.trim() || 'Others';
         switch (lt) {
             case 'Singleton':
-                return 'symbol-class';
+                return 'symbol-class'; // Represents the application/service class
             case 'Scoped':
-                return 'symbol-variable';
+                return 'symbol-interface'; // Represents the contract/interface being implemented
             case 'Transient':
-                return 'symbol-method';
+                return 'symbol-method'; // Represents the factory method pattern often used
+            case 'Others':
+                return 'symbol-namespace'; // Represents general .NET constructs
             default:
-                return 'symbol-misc';
+                return 'symbol-namespace';
+        }
+    }
+
+    /**
+     * Update the current workspace context
+     */
+    private updateCurrentWorkspace(): void {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            const newWorkspaceFolder = workspaceFolders[0].uri.fsPath;
+
+            // Check if workspace actually changed
+            if (this.currentWorkspaceFolder !== newWorkspaceFolder) {
+                const previousWorkspace = this.currentWorkspaceFolder;
+                this.currentWorkspaceFolder = newWorkspaceFolder;
+                this.logger.info(`Workspace changed from: ${previousWorkspace} to: ${this.currentWorkspaceFolder}`);
+
+                // Load data for new workspace
+                this.loadWorkspaceData();
+            } else {
+                this.logger.debug(`Workspace context updated: ${this.currentWorkspaceFolder}`);
+            }
+        } else {
+            this.currentWorkspaceFolder = null;
+            this.logger.warn('No workspace folder available');
+            this.clear();
+        }
+    }
+
+    /**
+     * Load workspace-specific data
+     */
+    private loadWorkspaceData(): void {
+        if (!this.currentWorkspaceFolder) {
+            this.clear();
+            return;
+        }
+
+        const storedData = this.loadAnalysisDataFromStorage();
+        if (storedData) {
+            this.currentAnalysisData = storedData;
+            this.treeDataProvider?.updateAnalysisData(storedData);
+            this.logger.info(`Loaded workspace data: ${storedData.totalServices} services from ${storedData.totalProjects} projects`);
+        } else {
+            this.clear();
+            this.logger.info(`No stored data found for workspace: ${this.currentWorkspaceFolder}`);
         }
     }
 
@@ -100,21 +150,49 @@ export class TreeViewManager {
     }
 
     updateAnalysisData(analysisData: WorkspaceAnalysis): void {
+        // Validate workspace context before updating data
+        this.updateCurrentWorkspace();
+
+        if (!this.currentWorkspaceFolder) {
+            this.logger.warn('Cannot update analysis data: no workspace folder available');
+            vscode.window.showWarningMessage('DI Navigator: No workspace folder available. Please open a .NET project.');
+            return;
+        }
+
         this.logger.info('TreeViewManager.updateAnalysisData called', 'TreeViewManager', {
             hasData: !!analysisData,
             projectsCount: analysisData?.projects?.length || 0,
-            totalServices: analysisData?.totalServices || 0
+            totalServices: analysisData?.totalServices || 0,
+            totalProjects: analysisData?.totalProjects || 0,
+            currentWorkspace: this.currentWorkspaceFolder
         });
+
+        // Validate that the analysis data belongs to the current workspace
+        if (analysisData.projects && analysisData.projects.length > 0) {
+            const analysisWorkspace = analysisData.projects[0].projectPath;
+            if (!analysisWorkspace.includes(this.currentWorkspaceFolder)) {
+                this.logger.warn('Analysis data workspace mismatch', 'TreeViewManager', {
+                    analysisWorkspace,
+                    currentWorkspace: this.currentWorkspaceFolder
+                });
+                vscode.window.showWarningMessage('DI Navigator: Analysis data does not match current workspace. Please re-analyze the current project.');
+                return;
+            }
+        }
 
         this.currentAnalysisData = analysisData;
         this.treeDataProvider?.updateAnalysisData(analysisData);
+
+        // Save to workspace-specific storage
+        this.saveAnalysisDataToStorage();
 
         // Log final data structure with service symbols
         this.logFinalDataStructure(analysisData);
 
         this.logger.info('Tree view data updated', 'TreeViewManager', {
             serviceCount: analysisData.totalServices,
-            projectCount: analysisData.totalProjects
+            projectCount: analysisData.totalProjects,
+            workspace: this.currentWorkspaceFolder
         });
     }
 
@@ -148,14 +226,16 @@ export class TreeViewManager {
                 const symbol = this.getServiceIcon(group.lifetime);
                 this.logger.info(`  Group: ${group.lifetime} (${group.services.length} services) [${symbol}]`, 'TreeViewManager');
 
+                // Debug: Log the actual lifetime values
+                console.debug(`TreeView: Group lifetime = "${group.lifetime}" (type: ${typeof group.lifetime})`);
+
                 group.services.forEach((service) => {
                     const lifetime = service.registrations[0]?.lifetime || 'Others';
                     const serviceSymbol = this.getServiceIcon(lifetime);
-                    const hasConflicts = service.hasConflicts ? ' [CONFLICTS]' : '';
                     const registrationCount = service.registrations.length;
                     const injectionCount = service.injectionSites.length;
 
-                    this.logger.info(`    Service: ${service.name}${hasConflicts} [${serviceSymbol}]`, 'TreeViewManager', {
+                    this.logger.info(`    Service: ${service.name} [${serviceSymbol}]`, 'TreeViewManager', {
                         registrations: registrationCount,
                         injections: injectionCount,
                         lifetime: lifetime
@@ -197,7 +277,89 @@ export class TreeViewManager {
     clear(): void {
         this.currentAnalysisData = null;
         this.treeDataProvider?.refresh();
+
+        // Clear workspace-specific storage
+        if (this.currentWorkspaceFolder) {
+            const storageKey = this.getWorkspaceStorageKey();
+            this.context.workspaceState.update(storageKey, undefined);
+        }
+
         this.logger.info('Tree view cleared', 'TreeViewManager');
+    }
+
+    /**
+     * Clear data for a specific workspace
+     * @param workspaceFolder Workspace folder path to clear data for
+     */
+    clearWorkspaceData(workspaceFolder: string): void {
+        if (this.currentWorkspaceFolder === workspaceFolder) {
+            this.clear();
+        }
+    }
+
+    /**
+     * Check if current workspace has analysis data
+     */
+    hasWorkspaceData(): boolean {
+        return this.currentAnalysisData !== null && this.currentWorkspaceFolder !== null;
+    }
+
+    /**
+     * Get workspace-specific storage key for analysis data
+     */
+    private getWorkspaceStorageKey(): string {
+        if (!this.currentWorkspaceFolder) {
+            return 'di-navigator-analysis-data';
+        }
+        // Create a hash of the workspace path for storage key
+        const workspaceHash = require('crypto').createHash('md5').update(this.currentWorkspaceFolder).digest('hex');
+        return `di-navigator-analysis-data-${workspaceHash}`;
+    }
+
+    /**
+     * Save analysis data to workspace-specific storage
+     */
+    private saveAnalysisDataToStorage(): void {
+        if (!this.currentWorkspaceFolder || !this.currentAnalysisData) {
+            return;
+        }
+
+        try {
+            const storageKey = this.getWorkspaceStorageKey();
+            const dataToStore = {
+                workspaceFolder: this.currentWorkspaceFolder,
+                analysisData: this.currentAnalysisData,
+                timestamp: Date.now()
+            };
+
+            this.context.workspaceState.update(storageKey, dataToStore);
+            this.logger.info(`Analysis data saved for workspace: ${this.currentWorkspaceFolder}`);
+        } catch (error) {
+            this.logger.error('Failed to save analysis data to storage', 'TreeViewManager', error);
+        }
+    }
+
+    /**
+     * Load analysis data from workspace-specific storage
+     */
+    private loadAnalysisDataFromStorage(): WorkspaceAnalysis | null {
+        if (!this.currentWorkspaceFolder) {
+            return null;
+        }
+
+        try {
+            const storageKey = this.getWorkspaceStorageKey();
+            const storedData = this.context.workspaceState.get(storageKey) as any;
+
+            if (storedData && storedData.workspaceFolder === this.currentWorkspaceFolder) {
+                this.logger.info(`Analysis data loaded for workspace: ${this.currentWorkspaceFolder}`);
+                return storedData.analysisData;
+            }
+        } catch (error) {
+            this.logger.error('Failed to load analysis data from storage', 'TreeViewManager', error);
+        }
+
+        return null;
     }
 
     /**
@@ -322,75 +484,17 @@ export class TreeViewManager {
             const service = item.serviceData;
             this.logger.debug(`Service selected: ${service.name}`, 'TreeViewManager', {
                 registrationCount: service.registrations?.length || 0,
-                injectionCount: service.injectionSites?.length || 0,
-                hasConflicts: service.hasConflicts || false
+                injectionCount: service.injectionSites?.length || 0
             });
 
-            // Show service options in a quick pick menu
-            this.showServiceQuickPick(service);
+            // Navigate directly to the first registration instead of showing options menu
+            this.navigateToFirstRegistration(service);
         } catch (error) {
             this.logger.error('Error handling service selection', 'TreeViewManager', error);
             vscode.window.showErrorMessage('Error handling service selection');
         }
     }
 
-    /**
-     * Show service options in a quick pick menu
-     * @param service Service data
-     */
-    private async showServiceQuickPick(service: any): Promise<void> {
-        const items: vscode.QuickPickItem[] = [
-            {
-                label: '$(eye) View Details',
-                description: 'Show detailed service information',
-                detail: `View registrations, injection sites, and conflicts for ${service.name}`
-            },
-            {
-                label: '$(arrow-right) Go to Registration',
-                description: 'Navigate to service registration',
-                detail: service.registrations.length > 0 ? 'Jump to the first registration location' : 'No registrations found'
-            },
-            {
-                label: '$(info) Show Summary',
-                description: 'Display service summary in output',
-                detail: `${service.registrations.length} registrations, ${service.injectionSites.length} injection sites`
-            }
-        ];
-
-        // Add conflict indicator if service has conflicts
-        if (service.hasConflicts) {
-            items.push({
-                label: '$(warning) View Conflicts',
-                description: 'Show service conflicts',
-                detail: 'Display dependency injection conflicts for this service'
-            });
-        }
-
-        const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: `Actions for ${service.name}`,
-            matchOnDescription: true,
-            matchOnDetail: true
-        });
-
-        if (!selected) {
-            return; // User cancelled
-        }
-
-        switch (selected.label) {
-            case '$(eye) View Details':
-                this.showServiceDetails(service);
-                break;
-            case '$(arrow-right) Go to Registration':
-                this.navigateToFirstRegistration(service);
-                break;
-            case '$(info) Show Summary':
-                this.showServiceSummary(service);
-                break;
-            case '$(warning) View Conflicts':
-                this.showServiceConflicts(service);
-                break;
-        }
-    }
 
     /**
       * Show detailed service information
@@ -398,7 +502,35 @@ export class TreeViewManager {
       */
     public async showServiceDetails(service: any): Promise<void> {
         const registrations = service.registrations
-            .map((r: any, i: number) => `  ${i + 1}. ${r.methodCall} (${r.filePath}:${r.lineNumber})`)
+            .map((r: any, i: number) => {
+                let cleanMethodCall = r.methodCall || 'Unknown';
+
+                // Enhanced cleanup for complex expressions
+                if (cleanMethodCall.includes('=>') || cleanMethodCall.includes('=') || cleanMethodCall.includes('(')) {
+                    const methodNameMatch = cleanMethodCall.match(/^(\w+)\s*\(/);
+                    if (methodNameMatch) {
+                        cleanMethodCall = methodNameMatch[1];
+                    }
+                }
+
+                // Additional cleanup for cases like "builder.Configuration" or "FactoryMethod"
+                if (cleanMethodCall.includes('.') || cleanMethodCall === 'FactoryMethod') {
+                    const parts = cleanMethodCall.split('.');
+                    if (parts.length > 1) {
+                        cleanMethodCall = parts[parts.length - 1];
+                    }
+                }
+
+                // Final validation - ensure we have a clean method name
+                if (!cleanMethodCall || cleanMethodCall === 'Unknown' || cleanMethodCall === 'FactoryMethod') {
+                    const fallbackMatch = (r.methodCall || '').match(/(\w+)\s*\(/);
+                    if (fallbackMatch) {
+                        cleanMethodCall = fallbackMatch[1];
+                    }
+                }
+
+                return `  ${i + 1}. ${cleanMethodCall} (${r.filePath}:${r.lineNumber})`;
+            })
             .join('\n');
 
         const injectionSites = service.injectionSites
@@ -410,7 +542,6 @@ export class TreeViewManager {
             Lifetime: ${service.registrations[0]?.lifetime || 'Unknown'}
             Registrations: ${service.registrations.length}
             Injection Sites: ${service.injectionSites.length}
-            Conflicts: ${service.hasConflicts ? 'Yes' : 'No'}
             Registrations: ${registrations || '  None found'}
             Injection Sites: ${injectionSites || '  None found'}
         `.trim();
@@ -477,29 +608,10 @@ export class TreeViewManager {
         channel.appendLine(`Lifetime: ${service.registrations[0]?.lifetime || 'Unknown'}`);
         channel.appendLine(`Total Registrations: ${service.registrations.length}`);
         channel.appendLine(`Total Injection Sites: ${service.injectionSites.length}`);
-        channel.appendLine(`Has Conflicts: ${service.hasConflicts ? 'Yes' : 'No'}`);
         channel.appendLine(`====================================`);
         channel.show();
     }
 
-    /**
-      * Show service conflicts
-      * @param service Service data
-      */
-    public showServiceConflicts(service: any): void {
-        if (!service.hasConflicts) {
-            vscode.window.showInformationMessage(`No conflicts found for service: ${service.name}`);
-            return;
-        }
-
-        const channel = vscode.window.createOutputChannel('DI Navigator');
-        channel.clear();
-        channel.appendLine(`=== Conflicts for: ${service.name} ===`);
-        channel.appendLine('Note: Detailed conflict information would be shown here');
-        channel.appendLine('This is a placeholder for conflict analysis functionality');
-        channel.appendLine(`====================================`);
-        channel.show();
-    }
 
     /**
      * Handle registration selection
@@ -508,7 +620,8 @@ export class TreeViewManager {
     private handleRegistrationSelection(item: DINavigatorTreeItem): void {
         try {
             if (item.registrationData) {
-                this.logger.debug(`Registration selected: ${item.registrationData.methodCall}`, 'TreeViewManager', {
+                const methodCall = item.registrationData.methodCall || 'Unknown';
+                this.logger.debug(`Registration selected: ${methodCall}`, 'TreeViewManager', {
                     filePath: item.registrationData.filePath,
                     lineNumber: item.registrationData.lineNumber
                 });
@@ -734,7 +847,7 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                     const totalServices = project.serviceGroups?.reduce((acc: number, group: any) => acc + group.services.length, 0) || 0;
                     const label = `${project.projectName} (${totalServices} services)`;
 
-                    this.logger.debug(`Creating project item: ${label}`, 'DINavigatorTreeProvider', {
+                    this.logger.debug(`${index} Creating project item: ${label}`, 'DINavigatorTreeProvider', {
                         projectName: project.projectName,
                         totalServices,
                         serviceGroupsCount: project.serviceGroups?.length || 0
@@ -804,6 +917,8 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                     const serviceCount = group.services?.length || 0;
                     const label = `${group.lifetime} (${serviceCount})`;
 
+                    console.debug(`TreeView: Creating group "${label}" with lifetime "${group.lifetime}"`);
+
                     this.logger.debug(`Creating service group item: ${label}`, 'DINavigatorTreeProvider', {
                         lifetime: group.lifetime,
                         serviceCount
@@ -858,7 +973,6 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                 try {
                     const registrationCount = service.registrations?.length || 0;
                     const injectionCount = service.injectionSites?.length || 0;
-                    const hasConflicts = service.hasConflicts || false;
 
                     let description = '';
                     if (registrationCount > 0) {
@@ -876,6 +990,8 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
                     const lifetime = service.registrations?.[0]?.lifetime || 'Others';
                     const icon = this.treeViewManager.getServiceIcon(lifetime);
 
+                    console.debug(`TreeView: Service "${service.name}" has lifetime "${lifetime}"`);
+
                     const treeItem = new DINavigatorTreeItem(
                         service.name || 'Unknown Service',
                         description,
@@ -888,16 +1004,10 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
 
                     treeItem.iconPath = new vscode.ThemeIcon(icon);
 
-                    // Add conflict indicator if service has conflicts
-                    if (hasConflicts) {
-                        treeItem.label = `${service.name} ⚠️`;
-                    }
-
                     // Log the service with its assigned symbol
                     this.logger.debug(`Service created: ${service.name} [${icon}] (${lifetime})`, 'DINavigatorTreeProvider', {
                         registrations: registrationCount,
-                        injections: injectionCount,
-                        hasConflicts
+                        injections: injectionCount
                     });
 
                     return treeItem;
@@ -934,9 +1044,13 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
 
             // Add registration items
             if (service.registrations && Array.isArray(service.registrations)) {
-                service.registrations.forEach((registration: any, index: number) => {
+                service.registrations.forEach((registration: any) => {
                     try {
-                        const label = `Registration ${index + 1}: ${registration.methodCall || 'Unknown'}`;
+                        // Use the service name (which should be the method name for factory methods)
+                        // This avoids the complex cleanup logic that was causing display issues
+                        const methodCall = service.name || registration.methodCall || 'Unknown';
+
+                        const label = `Registration : ${methodCall}`;
                         const tooltip = `${registration.filePath || 'Unknown'}:${registration.lineNumber || 0}`;
 
                         items.push(new DINavigatorTreeItem(

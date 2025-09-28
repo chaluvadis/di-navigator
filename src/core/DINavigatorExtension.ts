@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Logger } from './Logger';
 import { ErrorHandler } from './ErrorHandler';
 import { TreeViewManager } from './TreeViewManager';
@@ -14,8 +16,12 @@ export class DINavigatorExtension {
     private readonly analysisService: AnalysisService;
     private readonly dataValidator: DataValidator;
 
-    private isInitialized = false;
+    private _isInitialized = false;
     private isDisposed = false;
+
+    public get isInitialized(): boolean {
+        return this._isInitialized;
+    }
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
@@ -29,7 +35,7 @@ export class DINavigatorExtension {
     }
 
     async initialize(): Promise<void> {
-        if (this.isInitialized) {
+        if (this._isInitialized) {
             this.logger.warn('Extension is already initialized');
             return;
         }
@@ -41,6 +47,15 @@ export class DINavigatorExtension {
         try {
             this.logger.info('Initializing DI Navigator Extension...');
 
+            // Validate workspace context first
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('No workspace folder available. Please open a .NET project.');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            this.logger.info(`Initializing for workspace: ${workspaceRoot}`);
+
             // Initialize tree view first
             this.treeViewManager.initialize();
 
@@ -50,11 +65,7 @@ export class DINavigatorExtension {
             }, 1000);
 
             // Initialize analysis service
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (workspaceFolders) {
-                const workspaceRoot = workspaceFolders[0].uri.fsPath;
-                this.analysisService.initialize(workspaceRoot);
-            }
+            this.analysisService.initialize(workspaceRoot);
 
             // Register commands
             this.registerCommands();
@@ -68,7 +79,10 @@ export class DINavigatorExtension {
             // Set up configuration integration
             this.setupConfigurationIntegration();
 
-            this.isInitialized = true;
+            // Set up workspace change handling
+            this.setupWorkspaceChangeHandling();
+
+            this._isInitialized = true;
             this.logger.info('DI Navigator Extension initialized successfully');
 
         } catch (error) {
@@ -101,6 +115,12 @@ export class DINavigatorExtension {
             'di-navigator.analyzeProject',
             () => this.analyzeProject(),
             'Analyze the current .NET project for dependency injection configuration'
+        );
+
+        registerCommand(
+            'di-navigator.analyzeSolution',
+            () => this.analyzeSolution(),
+            'Analyze all projects in the .NET solution for dependency injection configuration'
         );
 
 
@@ -239,16 +259,51 @@ export class DINavigatorExtension {
         this.context.subscriptions.push(configWatcher);
     }
 
+    private setupWorkspaceChangeHandling(): void {
+        // Handle workspace folder changes
+        const workspaceChangeListener = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+            const currentWorkspaceFolders = vscode.workspace.workspaceFolders;
+
+            if (!currentWorkspaceFolders || currentWorkspaceFolders.length === 0) {
+                this.logger.info('Workspace folders removed, clearing analysis data');
+                this.treeViewManager.clear();
+                return;
+            }
+
+            const newWorkspaceRoot = currentWorkspaceFolders[0].uri.fsPath;
+            this.logger.info(`Workspace changed to: ${newWorkspaceRoot}`);
+
+            // Clear existing data when workspace changes
+            this.treeViewManager.clear();
+
+            // Reinitialize analysis service for new workspace
+            this.analysisService.initialize(newWorkspaceRoot);
+
+            // Show message about workspace change
+            const workspaceName = currentWorkspaceFolders[0].name;
+            vscode.window.showInformationMessage(
+                `DI Navigator: Switched to workspace "${workspaceName}". Please re-analyze to see project data.`
+            );
+        });
+
+        this.context.subscriptions.push(workspaceChangeListener);
+        this.logger.info('Workspace change handling set up');
+    }
+
     async analyzeProject(): Promise<void> {
         try {
             this.logger.info('Starting project analysis...');
 
             const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders) {
-                throw new Error('No workspace folder found');
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                throw new Error('No workspace folder found. Please open a .NET project.');
             }
 
-            const projectPath = workspaceFolders[0].uri.fsPath;
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const solutionPath = await this.findSolutionFile(workspaceRoot) || workspaceRoot;
+
+            this.logger.info(`Analyzing workspace: ${workspaceRoot}`);
+            this.logger.info(`Using solution/project file: ${solutionPath}`);
 
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
@@ -281,7 +336,7 @@ export class DINavigatorExtension {
                     progress.report({ message, increment: step.increment });
                 };
 
-                let analysisResult: any;
+                let allProjects: any[];
 
                 try {
                     reportProgress(currentStep++);
@@ -290,27 +345,34 @@ export class DINavigatorExtension {
                     await new Promise(resolve => setTimeout(resolve, 100)); // Simulate work
                     reportProgress(currentStep++);
 
-                    // Parse solution
-                    analysisResult = await this.analysisService.analyzeProject(projectPath);
+                    // Parse solution - now analyze as solution to get all projects
+                    allProjects = await this.analysisService.analyzeSolution(solutionPath);
+
+                    if (allProjects.length === 0) {
+                        throw new Error('No projects found in solution');
+                    }
+
                     reportProgress(currentStep++);
 
-                    // Analyze registrations
-                    const serviceCount = analysisResult.serviceGroups.reduce((acc: number, group: any) => acc + group.services.length, 0);
-                    reportProgress(currentStep++, `(${serviceCount} services found)`);
+                    // Calculate totals across all projects
+                    const totalServices = allProjects.reduce((acc: number, project: any) =>
+                        acc + project.serviceGroups.reduce((acc2: number, group: any) => acc2 + group.services.length, 0), 0);
+                    reportProgress(currentStep++, `(${totalServices} services found in ${allProjects.length} projects)`);
 
-                    // Find injection sites
-                    const injectionCount = analysisResult.serviceGroups.reduce((acc: number, group: any) =>
-                        acc + group.services.reduce((acc2: number, service: any) => acc2 + service.injectionSites.length, 0), 0);
-                    reportProgress(currentStep++, `(${injectionCount} sites found)`);
+                    // Find injection sites across all projects
+                    const totalInjections = allProjects.reduce((acc: number, project: any) =>
+                        acc + project.serviceGroups.reduce((acc2: number, group: any) =>
+                            acc2 + group.services.reduce((acc3: number, service: any) => acc3 + service.injectionSites.length, 0), 0), 0);
+                    reportProgress(currentStep++, `(${totalInjections} sites found)`);
 
-                    // Analyze lifetimes
-                    const lifetimeGroups = analysisResult.serviceGroups.length;
-                    reportProgress(currentStep++, `(${lifetimeGroups} groups)`);
+                    // Analyze lifetimes across all projects
+                    const totalGroups = allProjects.reduce((acc: number, project: any) => acc + project.serviceGroups.length, 0);
+                    reportProgress(currentStep++, `(${totalGroups} groups)`);
 
-                    // Detect conflicts
-                    const conflictCount = (analysisResult.lifetimeConflicts?.length || 0) +
-                                        (analysisResult.serviceDependencyIssues?.length || 0);
-                    reportProgress(currentStep++, `(${conflictCount} issues found)`);
+                    // Detect conflicts across all projects
+                    const totalConflicts = allProjects.reduce((acc: number, project: any) =>
+                        acc + (project.lifetimeConflicts?.length || 0) + (project.serviceDependencyIssues?.length || 0), 0);
+                    reportProgress(currentStep++, `(${totalConflicts} issues found)`);
 
                     // Process results
                     reportProgress(currentStep++);
@@ -324,13 +386,12 @@ export class DINavigatorExtension {
                     throw error;
                 }
 
-                // Wrap the single project result in WorkspaceAnalysis format
+                // Create workspace analysis with all projects
                 const workspaceAnalysis: WorkspaceAnalysis = {
-                    projects: [analysisResult],
-                    totalServices: analysisResult.serviceGroups.reduce(
-                        (acc: number, group: any) => acc + group.services.length, 0
-                    ),
-                    totalProjects: 1,
+                    projects: allProjects,
+                    totalServices: allProjects.reduce((acc: number, project: any) =>
+                        acc + project.serviceGroups.reduce((acc2: number, group: any) => acc2 + group.services.length, 0), 0),
+                    totalProjects: allProjects.length,
                     analysisTimestamp: new Date()
                 };
 
@@ -362,8 +423,7 @@ export class DINavigatorExtension {
                 this.logger.info('WorkspaceAnalysis structure created', 'DINavigatorExtension', {
                     totalServices: workspaceAnalysis.totalServices,
                     totalProjects: workspaceAnalysis.totalProjects,
-                    projectName: analysisResult.projectName,
-                    serviceGroupsCount: analysisResult.serviceGroups.length,
+                    projectNames: allProjects.map((p: any) => p.projectName),
                     validationPassed: validationResult.isValid,
                     validationIssues: validationResult.summary.totalIssues
                 });
@@ -372,19 +432,163 @@ export class DINavigatorExtension {
                 this.treeViewManager.updateAnalysisData(workspaceAnalysis);
 
                 // Show results summary
-                const serviceCount = analysisResult.serviceGroups.reduce(
-                    (acc: number, group: any) => acc + group.services.length, 0
-                );
-
                 vscode.window.showInformationMessage(
-                    `DI Navigator: Found ${serviceCount} services in ${analysisResult.serviceGroups.length} groups`
+                    `DI Navigator: Found ${workspaceAnalysis.totalServices} services across ${workspaceAnalysis.totalProjects} projects`
                 );
 
-                this.logger.info(`Analysis completed: ${serviceCount} services found`);
+                this.logger.info(`Analysis completed: ${workspaceAnalysis.totalServices} services across ${workspaceAnalysis.totalProjects} projects`);
             });
 
         } catch (error) {
             this.errorHandler.handleError(error, 'Project analysis failed');
+        }
+    }
+
+    async analyzeSolution(): Promise<void> {
+        try {
+            this.logger.info('Starting solution analysis...');
+
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) {
+                throw new Error('No workspace folder found');
+            }
+
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            const solutionPath = await this.findSolutionFile(workspaceRoot);
+
+            if (!solutionPath) {
+                throw new Error('No .NET solution (.sln, .slnx) or project (.csproj) files found in workspace. Please ensure you have opened a .NET project.');
+            }
+
+            this.logger.info(`Using solution/project file: ${solutionPath}`);
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'DI Navigator: Analyzing solution...',
+                cancellable: true
+            }, async (progress, token) => {
+                // Check for cancellation
+                token.onCancellationRequested(() => {
+                    this.logger.info('Solution analysis cancelled by user');
+                    throw new Error('Analysis cancelled by user');
+                });
+
+                // Detailed progress steps
+                const progressSteps = [
+                    { message: 'Initializing solution analysis...', increment: 5 },
+                    { message: 'Parsing solution structure...', increment: 15 },
+                    { message: 'Analyzing all projects...', increment: 30 },
+                    { message: 'Detecting service registrations...', increment: 50 },
+                    { message: 'Finding injection sites...', increment: 65 },
+                    { message: 'Analyzing service lifetimes...', increment: 75 },
+                    { message: 'Detecting conflicts...', increment: 85 },
+                    { message: 'Processing results...', increment: 95 },
+                    { message: 'Finalizing analysis...', increment: 100 }
+                ];
+
+                let currentStep = 0;
+                const reportProgress = (stepIndex: number, additionalInfo?: string) => {
+                    const step = progressSteps[stepIndex];
+                    const message = additionalInfo ? `${step.message} ${additionalInfo}` : step.message;
+                    progress.report({ message, increment: step.increment });
+                };
+
+                let allProjects: any[];
+
+                try {
+                    reportProgress(currentStep++);
+
+                    // Initialize analysis
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    reportProgress(currentStep++);
+
+                    // Analyze all projects in solution
+                    allProjects = await this.analysisService.analyzeSolution(solutionPath);
+                    reportProgress(currentStep++);
+
+                    if (allProjects.length === 0) {
+                        throw new Error('No projects found in solution');
+                    }
+
+                    // Analyze registrations across all projects
+                    const totalServices = allProjects.reduce((acc: number, project: any) =>
+                        acc + project.serviceGroups.reduce((acc2: number, group: any) => acc2 + group.services.length, 0), 0);
+                    reportProgress(currentStep++, `(${totalServices} services found in ${allProjects.length} projects)`);
+
+                    // Find injection sites
+                    const totalInjections = allProjects.reduce((acc: number, project: any) =>
+                        acc + project.serviceGroups.reduce((acc2: number, group: any) =>
+                            acc2 + group.services.reduce((acc3: number, service: any) => acc3 + service.injectionSites.length, 0), 0), 0);
+                    reportProgress(currentStep++, `(${totalInjections} sites found)`);
+
+                    // Analyze lifetimes
+                    const totalGroups = allProjects.reduce((acc: number, project: any) => acc + project.serviceGroups.length, 0);
+                    reportProgress(currentStep++, `(${totalGroups} groups)`);
+
+                    // Detect conflicts
+                    const totalConflicts = allProjects.reduce((acc: number, project: any) =>
+                        acc + (project.lifetimeConflicts?.length || 0) + (project.serviceDependencyIssues?.length || 0), 0);
+                    reportProgress(currentStep++, `(${totalConflicts} issues found)`);
+
+                    // Process results
+                    reportProgress(currentStep++);
+
+                    // Finalize
+                    reportProgress(currentStep++);
+
+                } catch (error) {
+                    progress.report({ message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, increment: 100 });
+                    throw error;
+                }
+
+                // Create workspace analysis with all projects
+                const workspaceAnalysis: WorkspaceAnalysis = {
+                    projects: allProjects,
+                    totalServices: allProjects.reduce((acc: number, project: any) =>
+                        acc + project.serviceGroups.reduce((acc2: number, group: any) => acc2 + group.services.length, 0), 0),
+                    totalProjects: allProjects.length,
+                    analysisTimestamp: new Date()
+                };
+
+                // Validate analysis data
+                const validationResult = this.dataValidator.validateWorkspaceAnalysis(workspaceAnalysis);
+
+                if (!validationResult.isValid) {
+                    this.logger.warn('Solution analysis data validation failed', 'DINavigatorExtension', {
+                        errorCount: validationResult.summary.errorCount,
+                        warningCount: validationResult.summary.warningCount
+                    });
+
+                    const errorIssues = validationResult.issues.filter((i: any) => i.severity === 'Error');
+                    if (errorIssues.length > 0) {
+                        const errorMessages = errorIssues.map((issue: any) => `• ${issue.message}`).join('\n');
+                        vscode.window.showWarningMessage(
+                            `DI Navigator: Solution analysis completed with ${errorIssues.length} data issues:\n${errorMessages}`,
+                            'View Details'
+                        ).then(selection => {
+                            if (selection === 'View Details') {
+                                this.showValidationDetails(validationResult);
+                            }
+                        });
+                    }
+                }
+
+                // Update tree view with all projects
+                this.treeViewManager.updateAnalysisData(workspaceAnalysis);
+
+                // Show results summary
+                const totalServices = workspaceAnalysis.totalServices;
+                const totalProjects = workspaceAnalysis.totalProjects;
+
+                vscode.window.showInformationMessage(
+                    `DI Navigator: Found ${totalServices} services across ${totalProjects} projects`
+                );
+
+                this.logger.info(`Solution analysis completed: ${totalServices} services across ${totalProjects} projects`);
+            });
+
+        } catch (error) {
+            this.errorHandler.handleError(error, 'Solution analysis failed');
         }
     }
 
@@ -581,7 +785,7 @@ export class DINavigatorExtension {
             channel.appendLine('=== Detailed Issues ===');
             validationResult.issues.forEach((issue: any, index: number) => {
                 const icon = issue.severity === 'Error' ? '❌' :
-                           issue.severity === 'Warning' ? '⚠️' : 'ℹ️';
+                    issue.severity === 'Warning' ? '⚠️' : 'ℹ️';
                 channel.appendLine(`${index + 1}. ${icon} [${issue.severity}] ${issue.message}`);
                 channel.appendLine(`   Field: ${issue.field}`);
                 channel.appendLine(`   Type: ${issue.type}`);
@@ -866,11 +1070,21 @@ export class DINavigatorExtension {
     }
 
     /**
-     * Show the DI Navigator tree view
-     */
+      * Show the DI Navigator tree view
+      */
     async showTreeView(): Promise<void> {
         try {
             this.logger.info('Manually showing DI Navigator tree view');
+
+            // Validate workspace context
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                vscode.window.showWarningMessage('DI Navigator: Please open a .NET project to use this extension.');
+                return;
+            }
+
+            const currentWorkspace = workspaceFolders[0].name;
+            this.logger.info(`Showing tree view for workspace: ${currentWorkspace}`);
 
             // Ensure the tree view is visible
             await this.treeViewManager.ensureVisible();
@@ -879,7 +1093,7 @@ export class DINavigatorExtension {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
             if (!analysisData || analysisData.totalServices === 0) {
                 const action = await vscode.window.showInformationMessage(
-                    'DI Navigator: Tree view is now visible. Ready to analyze your .NET project!',
+                    `DI Navigator: Tree view is now visible for workspace "${currentWorkspace}". Ready to analyze your .NET project!`,
                     'Analyze Project',
                     'Learn More'
                 );
@@ -891,7 +1105,7 @@ export class DINavigatorExtension {
                 }
             } else {
                 vscode.window.showInformationMessage(
-                    `DI Navigator: Tree view showing ${analysisData.totalServices} services from ${analysisData.totalProjects} project(s)`
+                    `DI Navigator: Tree view showing ${analysisData.totalServices} services from ${analysisData.totalProjects} project(s) in workspace "${currentWorkspace}"`
                 );
             }
         } catch (error) {
@@ -932,8 +1146,49 @@ export class DINavigatorExtension {
     }
 
     /**
-     * Check if service name matches search query
-     */
+      * Find .NET solution file in the workspace directory
+      * @param workspaceRoot Root directory to search in
+      * @returns Path to .sln file or null if not found
+      */
+    private async findSolutionFile(workspaceRoot: string): Promise<string | null> {
+        try {
+            // List all files in the workspace root
+            const files = await fs.promises.readdir(workspaceRoot);
+
+            // Look for solution files (.sln and .slnx)
+            const solutionFiles = files.filter((file: string) =>
+                file.endsWith('.sln') || file.endsWith('.slnx')
+            );
+
+            if (solutionFiles.length > 0) {
+                // Return the first .sln file found
+                const solutionPath = path.join(workspaceRoot, solutionFiles[0]);
+                this.logger.info(`Found solution file: ${solutionPath}`);
+                return solutionPath;
+            }
+
+            // If no .sln file found, look for .csproj files
+            const projectFiles = files.filter((file: string) => file.endsWith('.csproj'));
+
+            if (projectFiles.length > 0) {
+                // Return the first .csproj file found
+                const projectPath = path.join(workspaceRoot, projectFiles[0]);
+                this.logger.info(`Found project file: ${projectPath}`);
+                return projectPath;
+            }
+
+            this.logger.warn('No .NET solution (.sln, .slnx) or project (.csproj) files found in workspace');
+            return null;
+
+        } catch (error) {
+            this.logger.error('Error finding solution file', 'DINavigatorExtension', error);
+            return null;
+        }
+    }
+
+    /**
+      * Check if service name matches search query
+      */
     private matchesSearchQuery(serviceName: string, query: string): boolean {
         const normalizedQuery = query.trim().toLowerCase();
 
