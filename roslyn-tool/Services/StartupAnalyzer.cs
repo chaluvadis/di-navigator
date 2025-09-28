@@ -215,8 +215,8 @@ public class StartupAnalyzer(IServiceRegistryAnalyzer sra) : IStartupAnalyzer
 
             foreach (var registration in sortedRegistrations)
             {
-                // Create a unique key based on service type, implementation type, and lifetime
-                var key = $"{registration.ServiceType}:{registration.ImplementationType}:{registration.Lifetime}";
+                // Create a unique key based on service type, implementation type, lifetime, and file location
+                var key = $"{registration.ServiceType}:{registration.ImplementationType}:{registration.Lifetime}:{registration.FilePath}:{registration.LineNumber}";
 
                 if (!seenRegistrations.Contains(key))
                 {

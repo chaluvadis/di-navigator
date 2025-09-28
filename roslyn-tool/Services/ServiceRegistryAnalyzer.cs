@@ -31,8 +31,8 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
     {
         try
         {
-            var expression = invocation.Expression.ToString();
-            var methodName = GetMethodName(expression);
+            // Extract method name directly from syntax tree
+            var methodName = ExtractMethodNameFromInvocation(invocation);
             if (string.IsNullOrWhiteSpace(methodName)) return null;
 
             var lineNumber = invocation
@@ -101,14 +101,30 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             throw;
         }
     }
-    private static string GetMethodName(string expression)
+    private static string ExtractMethodNameFromInvocation(InvocationExpressionSyntax invocation)
     {
-        // More precise detection of IServiceCollection method calls
-        if (expression.Contains("services.Add") || expression.Contains("Services.Add"))
+        try
         {
-            return expression.Split('.').Last();
+            // Extract method name directly from the syntax tree
+            if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+            {
+                var methodName = memberAccess.Name.ToString();
+
+                // Handle generic methods like AddTransient<T>()
+                if (memberAccess.Name is GenericNameSyntax genericName)
+                {
+                    return genericName.Identifier.Text;
+                }
+
+                return methodName;
+            }
+
+            return string.Empty;
         }
-        return string.Empty;
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     private static List<InvocationExpressionSyntax> FindServiceCollectionInvocations(SyntaxNode root)
@@ -121,21 +137,57 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
         {
             if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
             {
-                var expressionText = memberAccess.Expression.ToString();
-                var methodName = memberAccess.Name.ToString();
+                var methodName = ExtractMethodNameFromInvocation(invocation);
 
-                // Check if this is a DI method call on services collection
-                if (IsDiMethod(methodName) &&
-                    (expressionText == "services" ||
-                     expressionText == "builder.Services" ||
-                     expressionText.EndsWith(".Services")))
+                // Check if this is a DI method call
+                if (IsDiMethod(methodName))
                 {
-                    invocations.Add(invocation);
+                    // Check if this is called on an IServiceCollection
+                    if (IsServiceCollectionExpression(memberAccess.Expression))
+                    {
+                        invocations.Add(invocation);
+                    }
                 }
             }
         }
 
         return invocations;
+    }
+
+    private static bool IsServiceCollectionExpression(ExpressionSyntax expression)
+    {
+        try
+        {
+            switch (expression)
+            {
+                case IdentifierNameSyntax identifier:
+                    // Direct variable reference: "services"
+                    var identifierName = identifier.Identifier.Text;
+                    return identifierName == "services" || identifierName == "Services";
+
+                case MemberAccessExpressionSyntax memberAccess:
+                    // Handle cases like "builder.Services", "container.Services", etc.
+                    var memberName = memberAccess.Name.ToString();
+                    return memberName == "Services" || memberName == "services";
+
+                case GenericNameSyntax genericName:
+                    // Handle generic types that might be IServiceCollection
+                    return genericName.Identifier.Text.Contains("Service") ||
+                           genericName.ToString().Contains("IServiceCollection");
+
+                default:
+                    // Check if the expression contains service-related keywords
+                    var expressionText = expression.ToString();
+                    return expressionText.Contains("services") ||
+                           expressionText.Contains("Services") ||
+                           expressionText.Contains("IServiceCollection") ||
+                           expressionText.Contains("ServiceCollection");
+            }
+        }
+        catch
+        {
+            return false;
+        }
     }
     private static ServiceScope GetServiceLifetime(string methodName)
     {
@@ -209,12 +261,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
 
                 case LambdaExpressionSyntax lambda:
                     // Handle lambda expressions like sp => new Service()
-                    // Try to extract the return type from the lambda body
-                    if (lambda.Body is ExpressionSyntax lambdaBody)
-                    {
-                        return ExtractTypeFromExpression(lambdaBody);
-                    }
-                    return "FactoryMethod";
+                    return ExtractTypeFromLambdaExpression(lambda);
 
                 case ObjectCreationExpressionSyntax objectCreation:
                     return objectCreation.Type.ToString();
@@ -228,11 +275,92 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                     return expression.ToString();
             }
         }
-        catch
+        catch (Exception ex)
         {
-            throw;
+            Console.WriteLine($"Error extracting type from expression: {ex.Message}");
+            return expression.ToString();
         }
     }
+    private static string ExtractTypeFromLambdaExpression(LambdaExpressionSyntax lambda)
+    {
+        try
+        {
+            // Handle lambda expressions like sp => new Service() or sp => { return new Service(); }
+            if (lambda.Body is ExpressionSyntax lambdaBody)
+            {
+                return ExtractTypeFromLambdaBody(lambdaBody);
+            }
+
+            // Handle lambda expressions with statement body like sp => { return new Service(); }
+            if (lambda.Body is BlockSyntax blockBody)
+            {
+                var returnStatement = blockBody.Statements
+                    .OfType<ReturnStatementSyntax>()
+                    .FirstOrDefault();
+
+                if (returnStatement?.Expression != null)
+                {
+                    return ExtractTypeFromLambdaBody(returnStatement.Expression);
+                }
+            }
+
+            return "FactoryMethod";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error extracting type from lambda expression: {ex.Message}");
+            return "FactoryMethod";
+        }
+    }
+
+    private static string ExtractTypeFromLambdaBody(ExpressionSyntax lambdaBody)
+    {
+        try
+        {
+            // Handle object creation: new Service()
+            if (lambdaBody is ObjectCreationExpressionSyntax objectCreation)
+            {
+                return objectCreation.Type.ToString();
+            }
+
+            // Handle method calls: serviceProvider.GetService<Service>()
+            if (lambdaBody is InvocationExpressionSyntax invocation)
+            {
+                var expressionText = invocation.Expression.ToString();
+                if (expressionText.Contains("GetService") || expressionText.Contains("GetRequiredService"))
+                {
+                    // Try to extract generic type argument
+                    if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                        memberAccess.Name is GenericNameSyntax genericName)
+                    {
+                        return genericName.TypeArgumentList.Arguments.FirstOrDefault()?.ToString() ?? "FactoryMethod";
+                    }
+                }
+
+                return invocation.ToString();
+            }
+
+            // Handle cast expressions: (Service)sp.GetService(typeof(IService))
+            if (lambdaBody is CastExpressionSyntax castExpression)
+            {
+                return castExpression.Type.ToString();
+            }
+
+            // Handle parenthesized expressions
+            if (lambdaBody is ParenthesizedExpressionSyntax parenthesized)
+            {
+                return ExtractTypeFromLambdaBody(parenthesized.Expression);
+            }
+
+            // Fallback to the expression's string representation
+            return lambdaBody.ToString();
+        }
+        catch
+        {
+            return "FactoryMethod";
+        }
+    }
+
     private static string ExtractNamespace(string filePath)
     {
         try
@@ -279,8 +407,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             var invocations = methodDecl.DescendantNodes().OfType<InvocationExpressionSyntax>();
             foreach (var invocation in invocations)
             {
-                var expression = invocation.Expression.ToString();
-                var methodName = GetMethodName(expression);
+                var methodName = ExtractMethodNameFromInvocation(invocation);
                 if (!string.IsNullOrWhiteSpace(methodName) && IsDiMethod(methodName))
                 {
                     var lineNumber = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
@@ -310,7 +437,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                 // Check if class contains DI methods before analyzing
                 var hasDiMethods = classDecl.DescendantNodes()
                     .OfType<InvocationExpressionSyntax>()
-                    .Any(inv => IsDiMethod(GetMethodName(inv.Expression.ToString())));
+                    .Any(inv => IsDiMethod(ExtractMethodNameFromInvocation(inv)));
 
                 if (hasDiMethods)
                 {
@@ -329,7 +456,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                 // Check if method contains DI registrations before analyzing
                 var hasDiMethods = methodDecl.DescendantNodes()
                     .OfType<InvocationExpressionSyntax>()
-                    .Any(inv => IsDiMethod(GetMethodName(inv.Expression.ToString())));
+                    .Any(inv => IsDiMethod(ExtractMethodNameFromInvocation(inv)));
 
                 if (hasDiMethods)
                 {
@@ -357,7 +484,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
 
             // Check if class contains DI registration methods
             var methods = classDecl.DescendantNodes().OfType<MethodDeclarationSyntax>();
-            var hasDiMethods = methods.Any(m => IsDiMethod(GetMethodName(m.Identifier.Text)));
+            var hasDiMethods = methods.Any(m => IsDiMethod(m.Identifier.Text));
 
             if (hasDiMethods)
             {
@@ -394,7 +521,7 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             // Check if it's an extension method for IServiceCollection
             var hasDiMethods = methodDecl.DescendantNodes()
                 .OfType<InvocationExpressionSyntax>()
-                .Any(inv => IsDiMethod(GetMethodName(inv.Expression.ToString())));
+                .Any(inv => IsDiMethod(ExtractMethodNameFromInvocation(inv)));
 
             if (hasDiMethods && methodName.StartsWith("Add"))
             {

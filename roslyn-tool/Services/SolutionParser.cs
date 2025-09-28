@@ -226,23 +226,57 @@ public class SolutionParser(string baseDirectory)
         var contentUpper = csprojContent.ToUpperInvariant();
 
         // Use dictionary lookup for better performance
-        var projectTypePatterns = new Dictionary<string, string>
+        var projectTypePatterns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            // ASP.NET Core patterns
+            // Modern ASP.NET Core patterns
             ["MICROSOFT.NET.SDK.WEB"] = "ASP.NET Core Web Application",
             ["MICROSOFT.ASPNETCORE"] = "ASP.NET Core Web Application",
-            ["SWASHBUCKLE.ASPNETCORE"] = "ASP.NET Core Web Application",
+            ["SWASHBUCKLE.ASPNETCORE"] = "ASP.NET Core Web Application with Swagger",
+
+            // Minimal API patterns
+            ["MINIMAL"] = "Minimal API Application",
+            ["MICROSOFT.ASPNETCORE.MINIMALAPI"] = "Minimal API Application",
+
+            // Blazor patterns
+            ["BLAZOR"] = "Blazor Application",
+            ["BLAZORSERVER"] = "Blazor Server Application",
+            ["BLAZORWASM"] = "Blazor WebAssembly Application",
+            ["BLAZORHYBRID"] = "Blazor Hybrid Application",
+
+            // MAUI patterns
+            ["MAUI"] = "MAUI Application",
+            ["MICROSOFT.MAUI"] = "MAUI Application",
+
+            // gRPC patterns
+            ["GRPC"] = "gRPC Service",
+            ["GRPC.ASPNETCORE"] = "gRPC Service",
+            ["GRPC.NET.CLIENT"] = "gRPC Client",
+
+            // Worker Service patterns
+            ["WORKERSERVICE"] = "Worker Service",
+            ["MICROSOFT.WORKERSERVICE"] = "Worker Service",
+
+            // Azure Functions patterns
+            ["AZUREFUNCTIONS"] = "Azure Functions",
+            ["MICROSOFT.AZURE.FUNCTIONS"] = "Azure Functions",
+            ["MICROSOFT.NET.SDK.FUNCTIONS"] = "Azure Functions",
 
             // Test project patterns
             ["MICROSOFT.NET.SDK.TEST"] = "Test Project",
             ["MICROSOFT.NET.TEST.SDK"] = "Test Project",
-            ["XUNIT"] = "Test Project",
-            ["NUNIT"] = "Test Project",
-            ["MSTEST"] = "Test Project",
+            ["XUNIT"] = "xUnit Test Project",
+            ["NUNIT"] = "NUnit Test Project",
+            ["MSTEST"] = "MSTest Test Project",
 
-            // Output type patterns
+            // Legacy patterns
             ["<OUTPUTTYPE>EXE</OUTPUTTYPE>"] = "Console Application",
-            ["<OUTPUTTYPE>LIBRARY</OUTPUTTYPE>"] = "Class Library"
+            ["<OUTPUTTYPE>LIBRARY</OUTPUTTYPE>"] = "Class Library",
+
+            // Additional modern patterns
+            ["MVC"] = "ASP.NET Core MVC Application",
+            ["RAZOR"] = "ASP.NET Core Razor Pages",
+            ["SIGNALR"] = "ASP.NET Core with SignalR",
+            ["IDENTITY"] = "ASP.NET Core with Identity"
         };
 
         // Single pass through patterns for better performance

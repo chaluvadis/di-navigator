@@ -38,6 +38,13 @@ export interface ProjectDI {
     dependencyGraph: Record<string, string[]>;
     parseStatus: 'success' | 'partial' | 'failed';
     errorDetails?: string[];
+    // Enhanced features from new Roslyn tool
+    lifetimeConflicts?: ServiceLifetimeConflict[];
+    serviceDependencyIssues?: ServiceDependencyIssue[];
+    customRegistries?: CustomRegistry[];
+    startupConfigurations?: StartupConfiguration[];
+    metadata?: ProjectMetadata;
+    analysisSummary?: AnalysisSummary;
 }
 
 export interface InjectionSite {
@@ -53,6 +60,58 @@ export interface InjectionSite {
 export interface Conflict {
     type: string; // 'Duplicate', 'MissingImpl', etc.
     details: string;
+}
+
+// Enhanced types from the new Roslyn tool
+export interface ServiceLifetimeConflict {
+    serviceType: string;
+    implementationType: string;
+    currentLifetime: string;
+    recommendedLifetime: string;
+    conflictReason: string;
+    filePath: string;
+    lineNumber: number;
+    severity: 'Low' | 'Medium' | 'High' | 'Critical';
+}
+
+export interface ServiceDependencyIssue {
+    serviceType: string;
+    dependencyType: string;
+    issueDescription: string;
+    filePath: string;
+    lineNumber: number;
+    severity: 'Info' | 'Warning' | 'Error';
+}
+
+export interface CustomRegistry {
+    registryName: string;
+    registryType: string;
+    filePath: string;
+    lineNumber: number;
+    registeredServices: string[];
+}
+
+export interface StartupConfiguration {
+    configurationMethod: string;
+    filePath: string;
+    lineNumber: number;
+    serviceRegistrations: any[];
+}
+
+export interface ProjectMetadata {
+    targetFramework: string;
+    packageReferences: string[];
+    outputType: string;
+    projectReferences: string[];
+}
+
+export interface AnalysisSummary {
+    totalProjects: number;
+    totalServiceRegistrations: number;
+    totalCustomRegistries: number;
+    totalStartupConfigurations: number;
+    serviceLifetimes: Record<string, number>;
+    projectTypes: Record<string, number>;
 }
 
 export interface WorkspaceAnalysis {

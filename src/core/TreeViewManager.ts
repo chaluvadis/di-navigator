@@ -14,7 +14,8 @@ export class TreeViewManager {
         this.logger = logger;
     }
     public getServiceIcon(lifetime: string): string {
-        switch (lifetime) {
+        let lt = lifetime.toLowerCase().trim();
+        switch (lt) {
             case 'Singleton':
                 return 'symbol-class';
             case 'Scoped':
@@ -32,42 +33,70 @@ export class TreeViewManager {
     initialize(): void {
         this.logger.info('Initializing TreeViewManager...');
 
-        // Create tree data provider
-        this.treeDataProvider = new DINavigatorTreeProvider(this.logger, this);
-        // Register tree view
-        this.treeView = vscode.window.createTreeView('diNavigator', {
-            treeDataProvider: this.treeDataProvider,
-            showCollapseAll: true,
-            canSelectMany: false
-        });
+        try {
+            // Create tree data provider
+            this.treeDataProvider = new DINavigatorTreeProvider(this.logger, this);
+            this.logger.info('Tree data provider created', 'TreeViewManager');
 
-        // Add context menu commands
-        this.addContextMenuCommands();
+            // Register tree view
+            this.treeView = vscode.window.createTreeView('di-navigator-tree-view', {
+                treeDataProvider: this.treeDataProvider,
+                showCollapseAll: true,
+                canSelectMany: false
+            });
 
-        // Handle tree item selection
-        this.treeView.onDidChangeSelection((event) => {
-            this.handleTreeSelection(event.selection);
-        });
+            this.logger.info('Tree view created successfully', 'TreeViewManager', {
+                viewId: 'di-navigator-tree-view',
+                hasProvider: !!this.treeDataProvider,
+                hasView: !!this.treeView
+            });
 
-        // Handle tree item expansion
-        this.treeView.onDidExpandElement((event) => {
-            this.logger.debug(`Expanded tree item: ${event.element.label}`, 'TreeViewManager');
-        });
+            // Add context menu commands
+            this.addContextMenuCommands();
 
-        // Handle tree item collapse
-        this.treeView.onDidCollapseElement((event) => {
-            this.logger.debug(`Collapsed tree item: ${event.element.label}`, 'TreeViewManager');
-        });
+            // Handle tree item selection
+            this.treeView.onDidChangeSelection((event) => {
+                this.handleTreeSelection(event.selection);
+            });
 
-        this.logger.info('TreeViewManager initialized successfully');
+            // Handle tree item expansion
+            this.treeView.onDidExpandElement((event) => {
+                this.logger.debug(`Expanded tree item: ${event.element.label}`, 'TreeViewManager');
+            });
+
+            // Handle tree item collapse
+            this.treeView.onDidCollapseElement((event) => {
+                this.logger.debug(`Collapsed tree item: ${event.element.label}`, 'TreeViewManager');
+            });
+
+            // Set initial tree data to show welcome message
+            this.treeDataProvider.updateAnalysisData({
+                projects: [],
+                totalServices: 0,
+                totalProjects: 0,
+                analysisTimestamp: new Date()
+            });
+
+            // Force refresh to ensure tree view displays
+            this.treeDataProvider.refresh();
+
+            this.logger.info('TreeViewManager initialized successfully');
+        } catch (error) {
+            this.logger.error('Failed to initialize TreeViewManager', 'TreeViewManager', error);
+            throw error;
+        }
     }
-
     /**
      * Add context menu commands for tree items
      */
     private addContextMenuCommands(): void {
-        // Note: Commands are registered in DINavigatorExtension.ts to avoid duplicates
-        // This method is reserved for future context menu setup if needed
+        try {
+            // Context menus are handled through the package.json menus section
+            // and command registrations in DINavigatorExtension.ts
+            this.logger.debug('Context menu commands configured via package.json', 'TreeViewManager');
+        } catch (error) {
+            this.logger.error('Failed to setup context menu commands', 'TreeViewManager', error);
+        }
     }
 
     updateAnalysisData(analysisData: WorkspaceAnalysis): void {
@@ -149,6 +178,20 @@ export class TreeViewManager {
     }
 
     /**
+     * Ensure the tree view is visible to the user
+     */
+    async ensureVisible(): Promise<void> {
+        if (this.treeView) {
+            // Try to reveal the tree view
+            await vscode.commands.executeCommand('workbench.view.explorer');
+            await vscode.commands.executeCommand('di-navigator-tree-view.focus');
+            this.logger.info('Tree view visibility ensured', 'TreeViewManager');
+        } else {
+            this.logger.warn('Tree view not initialized, cannot ensure visibility', 'TreeViewManager');
+        }
+    }
+
+    /**
      * Clear the tree view data
      */
     clear(): void {
@@ -162,32 +205,77 @@ export class TreeViewManager {
      * @param selection Selected tree items
      */
     private handleTreeSelection(selection: readonly DINavigatorTreeItem[]): void {
-        if (selection.length === 0) {
-            return;
+        try {
+            if (selection.length === 0) {
+                this.logger.debug('No items selected', 'TreeViewManager');
+                return;
+            }
+
+            const selectedItem = selection[0];
+
+            // Validate selected item
+            if (!selectedItem) {
+                this.logger.warn('Selected item is null or undefined', 'TreeViewManager');
+                return;
+            }
+
+            this.logger.debug(`Tree item selected: ${selectedItem.label}`, 'TreeViewManager', {
+                type: selectedItem.itemType,
+                contextValue: selectedItem.contextValue,
+                hasData: !!(selectedItem.projectData || selectedItem.serviceData || selectedItem.registrationData || selectedItem.injectionSiteData)
+            });
+
+            // Handle different types of tree items
+            switch (selectedItem.itemType) {
+                case 'project':
+                    this.handleProjectSelection(selectedItem);
+                    break;
+                case 'service':
+                    this.handleServiceSelection(selectedItem);
+                    break;
+                case 'registration':
+                    this.handleRegistrationSelection(selectedItem);
+                    break;
+                case 'injection-site':
+                    this.handleInjectionSiteSelection(selectedItem);
+                    break;
+                case 'info':
+                    this.handleInfoSelection(selectedItem);
+                    break;
+                default:
+                    this.logger.debug(`Unhandled selection type: ${selectedItem.itemType}`, 'TreeViewManager');
+            }
+        } catch (error) {
+            this.logger.error('Error handling tree selection', 'TreeViewManager', error);
         }
+    }
 
-        const selectedItem = selection[0];
-        this.logger.debug(`Tree item selected: ${selectedItem.label}`, 'TreeViewManager', {
-            type: selectedItem.itemType,
-            contextValue: selectedItem.contextValue
-        });
+    /**
+     * Handle info selection (welcome messages, etc.)
+     * @param item Selected info item
+     */
+    private handleInfoSelection(item: DINavigatorTreeItem): void {
+        try {
+            const label = typeof item.label === 'string' ? item.label : item.label?.label || 'Unknown';
+            this.logger.debug(`Info item selected: ${label}`, 'TreeViewManager');
 
-        // Handle different types of tree items
-        switch (selectedItem.itemType) {
-            case 'project':
-                this.handleProjectSelection(selectedItem);
-                break;
-            case 'service':
-                this.handleServiceSelection(selectedItem);
-                break;
-            case 'registration':
-                this.handleRegistrationSelection(selectedItem);
-                break;
-            case 'injection-site':
-                this.handleInjectionSiteSelection(selectedItem);
-                break;
-            default:
-                this.logger.debug(`Unhandled selection type: ${selectedItem.itemType}`, 'TreeViewManager');
+            // Show helpful information based on the info item
+            if (label.includes('Run "DI Navigator: Analyze Project"')) {
+                // Offer to run analysis
+                vscode.window.showInformationMessage(
+                    'Ready to analyze your .NET project?',
+                    'Analyze Now',
+                    'Learn More'
+                ).then(action => {
+                    if (action === 'Analyze Now') {
+                        vscode.commands.executeCommand('di-navigator.analyzeProject');
+                    } else if (action === 'Learn More') {
+                        vscode.env.openExternal(vscode.Uri.parse('https://github.com/chaluvadis/di-navigator'));
+                    }
+                });
+            }
+        } catch (error) {
+            this.logger.error('Error handling info selection', 'TreeViewManager', error);
         }
     }
 
@@ -196,45 +284,55 @@ export class TreeViewManager {
      * @param item Selected project item
      */
     private handleProjectSelection(item: DINavigatorTreeItem): void {
-        if (!item.projectData) {
-            this.logger.warn('No project data available for selected item', 'TreeViewManager');
-            return;
+        try {
+            if (!item.projectData) {
+                this.logger.warn('No project data available for selected item', 'TreeViewManager');
+                return;
+            }
+
+            const project = item.projectData;
+            const totalServices = project.serviceGroups?.reduce((acc: number, group: any) => acc + group.services.length, 0) || 0;
+            const groupCount = project.serviceGroups?.length || 0;
+
+            this.logger.debug(`Project selected: ${project.projectName}`, 'TreeViewManager', {
+                totalServices,
+                groupCount,
+                projectPath: project.projectPath
+            });
+
+            // Show project summary in output channel
+            this.showProjectSummary(project);
+        } catch (error) {
+            this.logger.error('Error handling project selection', 'TreeViewManager', error);
         }
-
-        const project = item.projectData;
-        const totalServices = project.serviceGroups.reduce((acc: number, group: any) => acc + group.services.length, 0);
-        const groupCount = project.serviceGroups.length;
-
-        this.logger.debug(`Project selected: ${project.projectName}`, 'TreeViewManager', {
-            totalServices,
-            groupCount,
-            projectPath: project.projectPath
-        });
-
-        // Show project summary in output channel
-        this.showProjectSummary(project);
     }
 
     /**
-       * Handle service selection
-       * @param item Selected service item
-       */
-     private handleServiceSelection(item: DINavigatorTreeItem): void {
-         if (!item.serviceData) {
-             this.logger.warn('No service data available for selected item', 'TreeViewManager');
-             return;
-         }
+     * Handle service selection
+     * @param item Selected service item
+     */
+    private handleServiceSelection(item: DINavigatorTreeItem): void {
+        try {
+            if (!item.serviceData) {
+                this.logger.warn('No service data available for selected item', 'TreeViewManager');
+                vscode.window.showWarningMessage('No service data available for selected item');
+                return;
+            }
 
-         const service = item.serviceData;
-         this.logger.debug(`Service selected: ${service.name}`, 'TreeViewManager', {
-             registrationCount: service.registrations.length,
-             injectionCount: service.injectionSites.length,
-             hasConflicts: service.hasConflicts
-         });
+            const service = item.serviceData;
+            this.logger.debug(`Service selected: ${service.name}`, 'TreeViewManager', {
+                registrationCount: service.registrations?.length || 0,
+                injectionCount: service.injectionSites?.length || 0,
+                hasConflicts: service.hasConflicts || false
+            });
 
-         // Show service options in a quick pick menu
-         this.showServiceQuickPick(service);
-     }
+            // Show service options in a quick pick menu
+            this.showServiceQuickPick(service);
+        } catch (error) {
+            this.logger.error('Error handling service selection', 'TreeViewManager', error);
+            vscode.window.showErrorMessage('Error handling service selection');
+        }
+    }
 
     /**
      * Show service options in a quick pick menu
@@ -308,17 +406,13 @@ export class TreeViewManager {
             .join('\n');
 
         const details = `
-Service: ${service.name}
-Lifetime: ${service.registrations[0]?.lifetime || 'Unknown'}
-Registrations: ${service.registrations.length}
-Injection Sites: ${service.injectionSites.length}
-Conflicts: ${service.hasConflicts ? 'Yes' : 'No'}
-
-Registrations:
-${registrations || '  None found'}
-
-Injection Sites:
-${injectionSites || '  None found'}
+            Service: ${service.name}
+            Lifetime: ${service.registrations[0]?.lifetime || 'Unknown'}
+            Registrations: ${service.registrations.length}
+            Injection Sites: ${service.injectionSites.length}
+            Conflicts: ${service.hasConflicts ? 'Yes' : 'No'}
+            Registrations: ${registrations || '  None found'}
+            Injection Sites: ${injectionSites || '  None found'}
         `.trim();
 
         const document = await vscode.workspace.openTextDocument({
@@ -334,9 +428,9 @@ ${injectionSites || '  None found'}
     }
 
     /**
-      * Navigate to the first registration of the service
-      * @param service Service data
-      */
+     * Navigate to the first registration of the service (Public method for command handlers)
+     * @param service Service data
+     */
     public async navigateToFirstRegistration(service: any): Promise<void> {
         if (service.registrations.length === 0) {
             vscode.window.showWarningMessage(`No registrations found for service: ${service.name}`);
@@ -412,8 +506,21 @@ ${injectionSites || '  None found'}
      * @param item Selected registration item
      */
     private handleRegistrationSelection(item: DINavigatorTreeItem): void {
-        if (item.registrationData) {
-            this.navigateToLocation(item.registrationData.filePath, item.registrationData.lineNumber);
+        try {
+            if (item.registrationData) {
+                this.logger.debug(`Registration selected: ${item.registrationData.methodCall}`, 'TreeViewManager', {
+                    filePath: item.registrationData.filePath,
+                    lineNumber: item.registrationData.lineNumber
+                });
+
+                this.navigateToLocation(item.registrationData.filePath, item.registrationData.lineNumber);
+            } else {
+                this.logger.warn('No registration data available for selected registration item', 'TreeViewManager');
+                vscode.window.showWarningMessage('No registration data available for selected item');
+            }
+        } catch (error) {
+            this.logger.error('Error handling registration selection', 'TreeViewManager', error);
+            vscode.window.showErrorMessage('Error navigating to registration location');
         }
     }
 
@@ -422,8 +529,21 @@ ${injectionSites || '  None found'}
      * @param item Selected injection site item
      */
     private handleInjectionSiteSelection(item: DINavigatorTreeItem): void {
-        if (item.injectionSiteData) {
-            this.navigateToLocation(item.injectionSiteData.filePath, item.injectionSiteData.lineNumber);
+        try {
+            if (item.injectionSiteData) {
+                this.logger.debug(`Injection site selected: ${item.injectionSiteData.className}.${item.injectionSiteData.memberName}`, 'TreeViewManager', {
+                    filePath: item.injectionSiteData.filePath,
+                    lineNumber: item.injectionSiteData.lineNumber
+                });
+
+                this.navigateToLocation(item.injectionSiteData.filePath, item.injectionSiteData.lineNumber);
+            } else {
+                this.logger.warn('No injection site data available for selected item', 'TreeViewManager');
+                vscode.window.showWarningMessage('No injection site data available for selected item');
+            }
+        } catch (error) {
+            this.logger.error('Error handling injection site selection', 'TreeViewManager', error);
+            vscode.window.showErrorMessage('Error navigating to injection site location');
         }
     }
 
@@ -434,22 +554,57 @@ ${injectionSites || '  None found'}
      */
     private async navigateToLocation(filePath: string, lineNumber: number): Promise<void> {
         try {
+            // Validate inputs
+            if (!filePath || typeof filePath !== 'string') {
+                throw new Error('Invalid file path provided');
+            }
+
+            if (!lineNumber || typeof lineNumber !== 'number' || lineNumber < 1) {
+                throw new Error('Invalid line number provided');
+            }
+
+            // Check if file exists
+            const fileExists = await this.fileExists(filePath);
+            if (!fileExists) {
+                throw new Error(`File does not exist: ${filePath}`);
+            }
+
             const uri = vscode.Uri.file(filePath);
             const document = await vscode.workspace.openTextDocument(uri);
             const editor = await vscode.window.showTextDocument(document);
 
-            const position = new vscode.Position(lineNumber - 1, 0);
+            const position = new vscode.Position(Math.max(0, lineNumber - 1), 0);
             editor.selection = new vscode.Selection(position, position);
             editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
 
             this.logger.debug(`Navigated to: ${filePath}:${lineNumber}`, 'TreeViewManager');
 
         } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
             this.logger.error(
-                `Failed to navigate to location: ${filePath}:${lineNumber}`,
+                `Failed to navigate to location: ${filePath}:${lineNumber} - ${errorMessage}`,
                 'TreeViewManager',
                 error
             );
+
+            // Show user-friendly error message
+            vscode.window.showErrorMessage(
+                `Cannot navigate to ${filePath}:${lineNumber} - ${errorMessage}`
+            );
+        }
+    }
+
+    /**
+     * Check if a file exists
+     * @param filePath Path to check
+     * @returns Promise<boolean> indicating if file exists
+     */
+    private async fileExists(filePath: string): Promise<boolean> {
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+            return true;
+        } catch {
+            return false;
         }
     }
 
@@ -502,103 +657,180 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
      * @returns Array of child tree items
      */
     getChildren(element?: DINavigatorTreeItem): Thenable<DINavigatorTreeItem[]> {
-        if (!element) {
-            // Root level - return service groups
-            return Promise.resolve(this.getRootItems());
-        }
+        try {
+            if (!element) {
+                // Root level - return service groups
+                return Promise.resolve(this.getRootItems());
+            }
 
-        switch (element.itemType) {
-            case 'project':
-                return Promise.resolve(this.getServiceGroups(element));
-            case 'group':
-                return Promise.resolve(this.getServiceItems(element));
-            case 'service':
-                return Promise.resolve(this.getRegistrationAndInjectionItems(element));
-            default:
-                return Promise.resolve([]);
+            switch (element.itemType) {
+                case 'project':
+                    return Promise.resolve(this.getServiceGroups(element));
+                case 'group':
+                    return Promise.resolve(this.getServiceItems(element));
+                case 'service':
+                    return Promise.resolve(this.getRegistrationAndInjectionItems(element));
+                case 'info':
+                    return Promise.resolve([]); // Info items are leaf nodes
+                default:
+                    this.logger.debug(`Unknown element type: ${element.itemType}`, 'DINavigatorTreeProvider');
+                    return Promise.resolve([]);
+            }
+        } catch (error) {
+            this.logger.error('Error getting tree children', 'DINavigatorTreeProvider', error);
+            return Promise.resolve([]);
         }
     }
 
     /**
-       * Get root level items (projects)
-       * @returns Array of project items
-       */
+     * Get root level items (projects)
+     * @returns Array of project items
+     */
     private getRootItems(): DINavigatorTreeItem[] {
-        this.logger.debug('getRootItems called', 'DINavigatorTreeProvider', {
-            hasAnalysisData: !!this.analysisData,
-            projectsCount: this.analysisData?.projects?.length || 0
-        });
-
-        if (!this.analysisData || !this.analysisData.projects || this.analysisData.projects.length === 0) {
-            this.logger.debug('No analysis data available, returning info item', 'DINavigatorTreeProvider');
-            return [new DINavigatorTreeItem(
-                'No analysis data available',
-                'Run analysis to see DI services',
-                'info',
-                vscode.TreeItemCollapsibleState.None
-            )];
-        }
-
-        const items = this.analysisData.projects.map(project => {
-            const totalServices = project.serviceGroups.reduce((acc: number, group: any) => acc + group.services.length, 0);
-            const label = `${project.projectName} (${totalServices} services)`;
-
-            this.logger.debug(`Creating project item: ${label}`, 'DINavigatorTreeProvider', {
-                projectName: project.projectName,
-                totalServices,
-                serviceGroupsCount: project.serviceGroups.length
+        try {
+            this.logger.debug('getRootItems called', 'DINavigatorTreeProvider', {
+                hasAnalysisData: !!this.analysisData,
+                projectsCount: this.analysisData?.projects?.length || 0
             });
 
-            return new DINavigatorTreeItem(
-                label,
-                `Project: ${project.projectPath}`,
-                'project',
-                totalServices > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
-                project
-            );
-        });
+            if (!this.analysisData) {
+                this.logger.debug('No analysis data available, returning welcome items', 'DINavigatorTreeProvider');
+                return [
+                    new DINavigatorTreeItem(
+                        'DI Navigator',
+                        'Ready to analyze .NET dependency injection',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    ),
+                    new DINavigatorTreeItem(
+                        'Run "DI Navigator: Analyze Project" to get started',
+                        'Execute analysis from the command palette or right-click on .csproj/.sln files',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    )
+                ];
+            }
 
-        this.logger.debug(`Returning ${items.length} root items`, 'DINavigatorTreeProvider');
-        return items;
+            if (!this.analysisData.projects || this.analysisData.projects.length === 0) {
+                this.logger.debug('No projects in analysis data, returning info items', 'DINavigatorTreeProvider');
+                return [
+                    new DINavigatorTreeItem(
+                        'No projects found',
+                        'Open a .NET project to see analysis results',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    ),
+                    new DINavigatorTreeItem(
+                        'Run analysis to populate this view',
+                        'Use the "Analyze Project" command to start',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    )
+                ];
+            }
+
+            const items = this.analysisData.projects.map((project, index) => {
+                try {
+                    const totalServices = project.serviceGroups?.reduce((acc: number, group: any) => acc + group.services.length, 0) || 0;
+                    const label = `${project.projectName} (${totalServices} services)`;
+
+                    this.logger.debug(`Creating project item: ${label}`, 'DINavigatorTreeProvider', {
+                        projectName: project.projectName,
+                        totalServices,
+                        serviceGroupsCount: project.serviceGroups?.length || 0
+                    });
+
+                    return new DINavigatorTreeItem(
+                        label,
+                        `Project: ${project.projectPath}`,
+                        'project',
+                        totalServices > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                        project  // projectData
+                    );
+                } catch (error) {
+                    this.logger.error(`Error creating project item for ${project.projectName}`, 'DINavigatorTreeProvider', error);
+                    return new DINavigatorTreeItem(
+                        `Error: ${project.projectName}`,
+                        'Error loading project data',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                }
+            });
+
+            this.logger.debug(`Returning ${items.length} root items`, 'DINavigatorTreeProvider');
+            return items;
+        } catch (error) {
+            this.logger.error('Error getting root items', 'DINavigatorTreeProvider', error);
+            return [
+                new DINavigatorTreeItem(
+                    'Error loading DI Navigator',
+                    'An error occurred while loading the tree view',
+                    'info',
+                    vscode.TreeItemCollapsibleState.None
+                )
+            ];
+        }
     }
 
     /**
-      * Get service groups for a project
-      * @param projectItem Project tree item
-      * @returns Array of service group items
-      */
+     * Get service groups for a project
+     * @param projectItem Project tree item
+     * @returns Array of service group items
+     */
     private getServiceGroups(projectItem: DINavigatorTreeItem): DINavigatorTreeItem[] {
-        const project = projectItem.projectData;
-        if (!project || !project.serviceGroups) {
+        try {
+            const project = projectItem.projectData;
+            if (!project) {
+                this.logger.warn('No project data available', 'DINavigatorTreeProvider');
+                return [];
+            }
+
+            if (!project.serviceGroups || !Array.isArray(project.serviceGroups)) {
+                this.logger.warn('No service groups available in project', 'DINavigatorTreeProvider');
+                return [];
+            }
+
+            // Sort service groups by lifetime priority
+            const lifetimeOrder = { 'Scoped': 0, 'Singleton': 1, 'Transient': 2, 'Others': 3 };
+            const sortedGroups = project.serviceGroups.sort((a: any, b: any) => {
+                const orderA = lifetimeOrder[a.lifetime as keyof typeof lifetimeOrder] ?? 999;
+                const orderB = lifetimeOrder[b.lifetime as keyof typeof lifetimeOrder] ?? 999;
+                return orderA - orderB;
+            });
+
+            return sortedGroups.map((group: any) => {
+                try {
+                    const serviceCount = group.services?.length || 0;
+                    const label = `${group.lifetime} (${serviceCount})`;
+
+                    this.logger.debug(`Creating service group item: ${label}`, 'DINavigatorTreeProvider', {
+                        lifetime: group.lifetime,
+                        serviceCount
+                    });
+
+                    return new DINavigatorTreeItem(
+                        label,
+                        `Service group with ${serviceCount} services`,
+                        'group',
+                        serviceCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                        undefined,  // projectData
+                        group       // groupData
+                    );
+                } catch (error) {
+                    this.logger.error('Error creating service group item', 'DINavigatorTreeProvider', error);
+                    return new DINavigatorTreeItem(
+                        'Error loading group',
+                        'Error loading service group data',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                }
+            });
+        } catch (error) {
+            this.logger.error('Error getting service groups', 'DINavigatorTreeProvider', error);
             return [];
         }
-
-        // Sort service groups by lifetime priority
-        const lifetimeOrder = { 'Scoped': 0, 'Singleton': 1, 'Transient': 2, 'Others': 3 };
-        const sortedGroups = project.serviceGroups.sort((a: any, b: any) => {
-            const orderA = lifetimeOrder[a.lifetime as keyof typeof lifetimeOrder] ?? 999;
-            const orderB = lifetimeOrder[b.lifetime as keyof typeof lifetimeOrder] ?? 999;
-            return orderA - orderB;
-        });
-
-        return sortedGroups.map((group: any) => {
-            const serviceCount = group.services.length;
-            const label = `${group.lifetime} (${serviceCount})`;
-
-            this.logger.debug(`Creating service group item: ${label}`, 'DINavigatorTreeProvider', {
-                lifetime: group.lifetime,
-                serviceCount
-            });
-
-            return new DINavigatorTreeItem(
-                label,
-                `Service group with ${serviceCount} services`,
-                'group',
-                serviceCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
-                undefined,
-                group
-            );
-        });
     }
 
     /**
@@ -607,60 +839,82 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
      * @returns Array of service items
      */
     private getServiceItems(groupItem: DINavigatorTreeItem): DINavigatorTreeItem[] {
-        const group = groupItem.groupData;
-        if (!group) {
+        try {
+            const group = groupItem.groupData;
+            if (!group) {
+                this.logger.warn('No group data available', 'DINavigatorTreeProvider');
+                return [];
+            }
+
+            if (!group.services || !Array.isArray(group.services)) {
+                this.logger.warn('No services available in group', 'DINavigatorTreeProvider');
+                return [];
+            }
+
+            // Sort services alphabetically by name
+            const sortedServices = group.services.sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+
+            return sortedServices.map((service: any) => {
+                try {
+                    const registrationCount = service.registrations?.length || 0;
+                    const injectionCount = service.injectionSites?.length || 0;
+                    const hasConflicts = service.hasConflicts || false;
+
+                    let description = '';
+                    if (registrationCount > 0) {
+                        description += `${registrationCount} reg${registrationCount > 1 ? 's' : ''}`;
+                    }
+                    if (injectionCount > 0) {
+                        if (description) { description += ', '; }
+                        description += `${injectionCount} injection${injectionCount > 1 ? 's' : ''}`;
+                    }
+
+                    const collapsibleState = (registrationCount > 0 || injectionCount > 0)
+                        ? vscode.TreeItemCollapsibleState.Collapsed
+                        : vscode.TreeItemCollapsibleState.None;
+
+                    const lifetime = service.registrations?.[0]?.lifetime || 'Others';
+                    const icon = this.treeViewManager.getServiceIcon(lifetime);
+
+                    const treeItem = new DINavigatorTreeItem(
+                        service.name || 'Unknown Service',
+                        description,
+                        'service',
+                        collapsibleState,
+                        undefined,  // projectData
+                        undefined,  // groupData
+                        service     // serviceData
+                    );
+
+                    treeItem.iconPath = new vscode.ThemeIcon(icon);
+
+                    // Add conflict indicator if service has conflicts
+                    if (hasConflicts) {
+                        treeItem.label = `${service.name} ⚠️`;
+                    }
+
+                    // Log the service with its assigned symbol
+                    this.logger.debug(`Service created: ${service.name} [${icon}] (${lifetime})`, 'DINavigatorTreeProvider', {
+                        registrations: registrationCount,
+                        injections: injectionCount,
+                        hasConflicts
+                    });
+
+                    return treeItem;
+                } catch (error) {
+                    this.logger.error('Error creating service item', 'DINavigatorTreeProvider', error);
+                    return new DINavigatorTreeItem(
+                        'Error loading service',
+                        'Error loading service data',
+                        'info',
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                }
+            });
+        } catch (error) {
+            this.logger.error('Error getting service items', 'DINavigatorTreeProvider', error);
             return [];
         }
-
-        // Sort services alphabetically by name
-        const sortedServices = group.services.sort((a: any, b: any) => a.name.localeCompare(b.name));
-
-        return sortedServices.map((service: any) => {
-            const registrationCount = service.registrations.length;
-            const injectionCount = service.injectionSites.length;
-            const hasConflicts = service.hasConflicts;
-
-            let description = '';
-            if (registrationCount > 0) {
-                description += `${registrationCount} reg${registrationCount > 1 ? 's' : ''}`;
-            }
-            if (injectionCount > 0) {
-                if (description) { description += ', '; }
-                description += `${injectionCount} injection${injectionCount > 1 ? 's' : ''}`;
-            }
-
-            const collapsibleState = (registrationCount > 0 || injectionCount > 0)
-                ? vscode.TreeItemCollapsibleState.Collapsed
-                : vscode.TreeItemCollapsibleState.None;
-
-            const lifetime = service.registrations[0]?.lifetime || 'Others';
-            const icon = this.treeViewManager.getServiceIcon(lifetime);
-
-            const treeItem = new DINavigatorTreeItem(
-                service.name,
-                description,
-                'service',
-                collapsibleState,
-                undefined,
-                service
-            );
-
-            treeItem.iconPath = new vscode.ThemeIcon(icon);
-
-            // Add conflict indicator if service has conflicts
-            if (hasConflicts) {
-                treeItem.label = `${service.name} ⚠️`;
-            }
-
-            // Log the service with its assigned symbol
-            this.logger.debug(`Service created: ${service.name} [${icon}] (${lifetime})`, 'DINavigatorTreeProvider', {
-                registrations: registrationCount,
-                injections: injectionCount,
-                hasConflicts
-            });
-
-            return treeItem;
-        });
     }
 
     /**
@@ -669,41 +923,67 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
      * @returns Array of registration and injection items
      */
     private getRegistrationAndInjectionItems(serviceItem: DINavigatorTreeItem): DINavigatorTreeItem[] {
-        const service = serviceItem.serviceData;
-        if (!service) {
+        try {
+            const service = serviceItem.serviceData;
+            if (!service) {
+                this.logger.warn('No service data available', 'DINavigatorTreeProvider');
+                return [];
+            }
+
+            const items: DINavigatorTreeItem[] = [];
+
+            // Add registration items
+            if (service.registrations && Array.isArray(service.registrations)) {
+                service.registrations.forEach((registration: any, index: number) => {
+                    try {
+                        const label = `Registration ${index + 1}: ${registration.methodCall || 'Unknown'}`;
+                        const tooltip = `${registration.filePath || 'Unknown'}:${registration.lineNumber || 0}`;
+
+                        items.push(new DINavigatorTreeItem(
+                            label,
+                            tooltip,
+                            'registration',
+                            vscode.TreeItemCollapsibleState.None,
+                            undefined,  // projectData
+                            undefined,  // groupData
+                            undefined,  // serviceData
+                            registration  // registrationData
+                        ));
+                    } catch (error) {
+                        this.logger.error('Error creating registration item', 'DINavigatorTreeProvider', error);
+                    }
+                });
+            }
+
+            // Add injection site items
+            if (service.injectionSites && Array.isArray(service.injectionSites)) {
+                service.injectionSites.forEach((site: any, index: number) => {
+                    try {
+                        const label = `Injection ${index + 1}: ${site.className || 'Unknown'}.${site.memberName || 'Unknown'}`;
+                        const tooltip = `${site.filePath || 'Unknown'}:${site.lineNumber || 0}`;
+
+                        items.push(new DINavigatorTreeItem(
+                            label,
+                            tooltip,
+                            'injection-site',
+                            vscode.TreeItemCollapsibleState.None,
+                            undefined,  // projectData
+                            undefined,  // groupData
+                            undefined,  // serviceData
+                            undefined,  // registrationData
+                            site        // injectionSiteData
+                        ));
+                    } catch (error) {
+                        this.logger.error('Error creating injection site item', 'DINavigatorTreeProvider', error);
+                    }
+                });
+            }
+
+            return items;
+        } catch (error) {
+            this.logger.error('Error getting registration and injection items', 'DINavigatorTreeProvider', error);
             return [];
         }
-
-        const items: DINavigatorTreeItem[] = [];
-
-        // Add registration items
-        service.registrations.forEach((registration: any, index: number) => {
-            items.push(new DINavigatorTreeItem(
-                `Registration ${index + 1}: ${registration.methodCall}`,
-                `${registration.filePath}:${registration.lineNumber}`,
-                'registration',
-                vscode.TreeItemCollapsibleState.None,
-                undefined,
-                undefined,
-                registration
-            ));
-        });
-
-        // Add injection site items
-        service.injectionSites.forEach((site: any, index: number) => {
-            items.push(new DINavigatorTreeItem(
-                `Injection ${index + 1}: ${site.className}.${site.memberName}`,
-                `${site.filePath}:${site.lineNumber}`,
-                'injection-site',
-                vscode.TreeItemCollapsibleState.None,
-                undefined,
-                undefined,
-                undefined,
-                site
-            ));
-        });
-
-        return items;
     }
 
     /**

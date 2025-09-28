@@ -9,7 +9,17 @@ export class RoslynToolService {
     private readonly roslynToolPath: string;
 
     constructor() {
-        this.roslynToolPath = path.join(__dirname, '..', 'roslyn-tool', 'bin', 'Debug', 'net9.0', 'DIServiceAnalyzer.dll');
+        // Try Release build first, then Debug build
+        const releasePath = path.join(__dirname, '..', 'roslyn-tool', 'bin', 'Release', 'net9.0', 'DIServiceAnalyzer.dll');
+        const debugPath = path.join(__dirname, '..', 'roslyn-tool', 'bin', 'Debug', 'net9.0', 'DIServiceAnalyzer.dll');
+
+        if (fs.existsSync(releasePath)) {
+            this.roslynToolPath = releasePath;
+        } else if (fs.existsSync(debugPath)) {
+            this.roslynToolPath = debugPath;
+        } else {
+            throw new Error(`Roslyn tool not found. Looked for: ${releasePath} and ${debugPath}. Please build the roslyn-tool project.`);
+        }
     }
     async analyzeSolution(solutionPath: string): Promise<any> {
         try {
@@ -21,7 +31,7 @@ export class RoslynToolService {
                 throw new Error(`Roslyn tool not found at: ${this.roslynToolPath}. Please build the roslyn-tool project.`);
             }
 
-            const command = `dotnet "${this.roslynToolPath}" --input "${solutionPath}" --output-format json`;
+            const command = `dotnet "${this.roslynToolPath}" --input "${solutionPath}"`;
             const { stdout, stderr } = await execAsync(command, {
                 cwd: path.dirname(solutionPath),
                 maxBuffer: 1024 * 1024 * 10
@@ -30,7 +40,18 @@ export class RoslynToolService {
             if (stderr) {
                 console.warn(`RoslynToolService stderr: ${stderr}`);
             }
-            return JSON.parse(stdout);
+
+            // Extract JSON from stdout - the tool outputs progress info mixed with JSON
+            const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                throw new Error(`No valid JSON found in Roslyn tool output. Raw output: ${stdout}`);
+            }
+
+            try {
+                return JSON.parse(jsonMatch[0]);
+            } catch (parseError) {
+                throw new Error(`Failed to parse extracted JSON: ${parseError}. Extracted JSON: ${jsonMatch[0]}`);
+            }
         } catch (error) {
             console.error(`RoslynToolService analysis failed: ${error}`);
             throw new Error(`Roslyn tool analysis failed: ${error}`);
@@ -83,7 +104,14 @@ export class RoslynToolService {
                 cycles: [],
                 dependencyGraph: {},
                 parseStatus: serviceGroups.length > 0 ? 'success' : 'partial',
-                errorDetails: serviceGroups.length === 0 ? ['No services found in analysis'] : undefined
+                errorDetails: serviceGroups.length === 0 ? ['No services found in analysis'] : undefined,
+                // Enhanced features from new Roslyn tool
+                lifetimeConflicts: this.mapLifetimeConflicts(analysisResult.LifetimeConflicts || []),
+                serviceDependencyIssues: this.mapServiceDependencyIssues(analysisResult.ServiceDependencyIssues || []),
+                customRegistries: this.mapCustomRegistries(analysisResult.CustomRegistries || []),
+                startupConfigurations: this.mapStartupConfigurations(analysisResult.StartupConfigurations || []),
+                metadata: this.mapProjectMetadata(analysisResult.Metadata || {}),
+                analysisSummary: this.mapAnalysisSummary(analysisResult.Summary || {})
             };
 
         } catch (error) {
@@ -163,5 +191,68 @@ export class RoslynToolService {
             serviceType: site.ServiceType || '',
             linkedRegistrationIds: site.LinkedRegistrationIds || []
         }));
+    }
+
+    private mapLifetimeConflicts(conflicts: any[]): any[] {
+        return conflicts.map(conflict => ({
+            serviceType: conflict.ServiceType || '',
+            implementationType: conflict.ImplementationType || '',
+            currentLifetime: conflict.CurrentLifetime || '',
+            recommendedLifetime: conflict.RecommendedLifetime || '',
+            conflictReason: conflict.ConflictReason || '',
+            filePath: conflict.FilePath || '',
+            lineNumber: conflict.LineNumber || 0,
+            severity: conflict.Severity || 'Low'
+        }));
+    }
+
+    private mapServiceDependencyIssues(issues: any[]): any[] {
+        return issues.map(issue => ({
+            serviceType: issue.ServiceType || '',
+            dependencyType: issue.DependencyType || '',
+            issueDescription: issue.IssueDescription || '',
+            filePath: issue.FilePath || '',
+            lineNumber: issue.LineNumber || 0,
+            severity: issue.Severity || 'Info'
+        }));
+    }
+
+    private mapCustomRegistries(registries: any[]): any[] {
+        return registries.map(registry => ({
+            registryName: registry.RegistryName || '',
+            registryType: registry.RegistryType || '',
+            filePath: registry.FilePath || '',
+            lineNumber: registry.LineNumber || 0,
+            registeredServices: registry.RegisteredServices || []
+        }));
+    }
+
+    private mapStartupConfigurations(configurations: any[]): any[] {
+        return configurations.map(config => ({
+            configurationMethod: config.ConfigurationMethod || '',
+            filePath: config.FilePath || '',
+            lineNumber: config.LineNumber || 0,
+            serviceRegistrations: config.ServiceRegistrations || []
+        }));
+    }
+
+    private mapProjectMetadata(metadata: any): any {
+        return {
+            targetFramework: metadata.TargetFramework || '',
+            packageReferences: metadata.PackageReferences || [],
+            outputType: metadata.OutputType || '',
+            projectReferences: metadata.ProjectReferences || []
+        };
+    }
+
+    private mapAnalysisSummary(summary: any): any {
+        return {
+            totalProjects: summary.TotalProjects || 0,
+            totalServiceRegistrations: summary.TotalServiceRegistrations || 0,
+            totalCustomRegistries: summary.TotalCustomRegistries || 0,
+            totalStartupConfigurations: summary.TotalStartupConfigurations || 0,
+            serviceLifetimes: summary.ServiceLifetimes || {},
+            projectTypes: summary.ProjectTypes || {}
+        };
     }
 }

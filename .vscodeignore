@@ -1,6 +1,5 @@
 .vscode/**
 .vscode-test/**
-out/**
 node_modules/**
 src/**
 .gitignore
@@ -17,7 +16,6 @@ vsc-extension-quickstart.md
 tools/**
 .github/**
 .vscode-test-web/**
-out/**
 .vscode-test/**
 node_modules/**
 readme.md
