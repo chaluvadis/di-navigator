@@ -1,101 +1,86 @@
-import {
-  ExtensionContext,
-  workspace, window,
-  commands, ProgressLocation
-} from 'vscode';
-import { diNavigatorProvider } from './treeView';
-import { serviceProvider } from './serviceProvider';
-import { registerCommands } from './commands';
-import {
-  CONFIG_EXCLUDE_FOLDERS, CONFIG_SECTION,
-  DEFAULT_EXCLUDE_FOLDERS, NET_FILE_PATTERNS,
-  VALID_WORKSPACE_CONTEXT
-} from './const';
+import * as vscode from 'vscode';
+import { DINavigatorExtension } from './core/DINavigatorExtension';
 
-const debounce = (func: Function, delay: number) => {
-  let timeoutId: NodeJS.Timeout;
-  return (...args: any[]) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => func.apply(null, args), delay);
-  };
-};
-function getExcludeGlob(fallbackPatterns: readonly string[]): string {
-  const config = workspace.getConfiguration(CONFIG_SECTION);
-  const patterns = config.get<string[]>(CONFIG_EXCLUDE_FOLDERS) || Array.from(fallbackPatterns);
-  return patterns.length > 1 ? `{${patterns.join(',')}}` : patterns[0];
-}
-export async function detectNetWorkspace(): Promise<boolean> {
-  try {
-    const excludeGlob = getExcludeGlob(DEFAULT_EXCLUDE_FOLDERS);
-    const csprojFiles = await workspace.findFiles(NET_FILE_PATTERNS[0], excludeGlob);
-    const slnFiles = await workspace.findFiles(NET_FILE_PATTERNS[1], excludeGlob);
-    const slnxFiles = await workspace.findFiles(NET_FILE_PATTERNS[2], excludeGlob);
-    const csFiles = await workspace.findFiles(NET_FILE_PATTERNS[3], excludeGlob);
-    return csprojFiles.length > 0 || slnFiles.length > 0 || slnxFiles.length > 0 || csFiles.length > 0;
-  } catch (error) {
-    console.error('Error detecting .NET workspace:', error);
-    return false;
-  }
-}
+// Export for testing
+export { DINavigatorExtension };
 
-export async function activate(context: ExtensionContext): Promise<void> {
-  console.log('Congratulations, your extension "di-navigator" is now active!');
+let diNavigator: DINavigatorExtension | undefined;
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    try {
+        console.log('🚀 DI Navigator: Extension activation started');
 
-  // Set context for serviceProvider
-  serviceProvider.setContext(context);
+        // Validate workspace before initializing
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            console.warn('DI Navigator: No workspace folder available. Extension will activate when a .NET project is opened.');
+            // Still create the extension instance but don't initialize until workspace is available
+            diNavigator = new DINavigatorExtension(context);
 
-  // Register TreeView provider always
-  const treeViewDisposable = window.registerTreeDataProvider('diNavigator', diNavigatorProvider);
-  context.subscriptions.push(treeViewDisposable);
+            // Set up workspace change listener
+            const workspaceChangeListener = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0 && !diNavigator?.isInitialized) {
+                    console.log('DI Navigator: Workspace detected, initializing extension...');
+                    diNavigator?.initialize().then(() => {
+                        const workspaceName = vscode.workspace.workspaceFolders![0].name;
+                        vscode.window.showInformationMessage(
+                            `DI Navigator: Activated for ${workspaceName} - Starting automatic analysis...`
+                        );
+                        diNavigator?.analyzeProject().then(() => {
+                            setTimeout(() => diNavigator?.showTreeView(), 1000);
+                        }).catch(error => {
+                            console.warn('Auto-analysis failed, showing tree view:', error);
+                            diNavigator?.showTreeView();
+                        });
+                    }).catch(error => {
+                        vscode.window.showErrorMessage(
+                            `DI Navigator: Failed to initialize - ${error}`
+                        );
+                    });
+                    workspaceChangeListener.dispose();
+                }
+            });
 
-  // Function to update workspace context and state
-  const updateWorkspaceContext = async (): Promise<void> => {
-    const isNet = await detectNetWorkspace();
-    await commands.executeCommand('setContext', VALID_WORKSPACE_CONTEXT, isNet);
-    if (isNet) {
-      console.log('.NET workspace detected. Refreshing DI services.');
-      // Run a background scan with a progress notification so activation is not blocked.
-      window.withProgress({
-        location: ProgressLocation.Notification,
-        title: 'DI Navigator: Scanning C# files',
-        cancellable: false
-      }, async (p) => {
-        await serviceProvider.collectRegistrations(p);
-        diNavigatorProvider.refresh();
-      }).then(() => {
-        // completed
-      }, (err: unknown) => {
-        console.error('Error during DI scan:', err);
-        diNavigatorProvider.refresh();
-      });
-    } else {
-      console.log('Non-.NET workspace. Clearing DI analysis.');
-      serviceProvider.clearState();
-      diNavigatorProvider.refresh();
+            context.subscriptions.push(workspaceChangeListener);
+            return;
+        }
+
+        diNavigator = new DINavigatorExtension(context);
+        await diNavigator.initialize();
+        console.log('✅ DI Navigator: Extension activated successfully');
+
+        const workspaceName = workspaceFolders[0].name;
+
+        // Show simple notification and auto-analyze
+        vscode.window.showInformationMessage(
+            `DI Navigator: Activated for ${workspaceName} - Starting automatic analysis...`
+        );
+
+        // Automatically analyze the project
+        if (diNavigator) {
+            try {
+                await diNavigator.analyzeProject();
+                // Show tree view after analysis
+                setTimeout(() => diNavigator?.showTreeView(), 1000);
+            } catch (error) {
+                // If auto-analysis fails, show the tree view anyway
+                console.warn('Auto-analysis failed, showing tree view:', error);
+                diNavigator?.showTreeView();
+            }
+        }
+    } catch (error) {
+        vscode.window.showErrorMessage(
+            `DI Navigator: Failed to activate - ${error}`
+        );
     }
-  };
-
-  // Initial detection and setup (do not block activation; run scan in background)
-  // Kick off detection/scan but don't await here so the extension activates quickly.
-  updateWorkspaceContext().catch(err => console.error('Error during initial workspace detection:', err));
-  // Watch for relevant file changes to update context and refresh
-
-  const debouncedUpdate = debounce(updateWorkspaceContext, 500); // 500ms debounce
-
-  NET_FILE_PATTERNS.forEach(pattern => {
-    const watcher = workspace.createFileSystemWatcher(pattern);
-    watcher.onDidCreate(debouncedUpdate);
-    watcher.onDidDelete(debouncedUpdate);
-    watcher.onDidChange(debouncedUpdate);
-    context.subscriptions.push(watcher);
-  });
-
-  // Register commands
-  registerCommands(context);
 }
 
-export function deactivate() {
-  serviceProvider.clearState();
-  // Refresh to clear the tree view
-  diNavigatorProvider.refresh();
+export function deactivate(): void {
+    try {
+        if (diNavigator) {
+            diNavigator.dispose();
+            diNavigator = undefined;
+        }
+    } catch (error) {
+        console.error('❌ DI Navigator: Error during deactivation:', error);
+    }
 }

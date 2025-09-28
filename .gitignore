@@ -10,3 +10,7 @@ testdata/
 dist/
 package-lock.json
 analysis.md
+test-project/
+.DS_Store
+temp_vsix
+docs

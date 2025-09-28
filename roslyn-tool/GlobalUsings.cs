@@ -1,0 +1,11 @@
+global using System.CommandLine;
+global using System.Text.Json;
+global using System.Text.RegularExpressions;
+global using System.Xml;
+global using DIServiceAnalyzer.Interfaces;
+global using DIServiceAnalyzer.Models;
+global using DIServiceAnalyzer.Services;
+global using Microsoft.CodeAnalysis;
+global using Microsoft.CodeAnalysis.CSharp;
+global using Microsoft.CodeAnalysis.CSharp.Syntax;
+global using Microsoft.Extensions.DependencyInjection;

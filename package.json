@@ -1,9 +1,9 @@
 {
-  "name": "di-service-navigator",
-  "displayName": "DI Service Navigator",
+  "name": "di-navigator",
+  "displayName": "DI Navigator",
+  "description": "Advanced dependency injection analysis and visualization for .NET projects",
+  "version": "2.0.0",
   "publisher": "nomad-in-code",
-  "description": "Visualize and explore Dependency Injection registrations and injection sites in your C# projects",
-  "version": "0.0.1",
   "icon": "./icon.png",
   "license": "MIT",
   "repository": {
@@ -18,98 +18,249 @@
     "vscode": "^1.104.0"
   },
   "categories": [
-    "Other",
-    "Programming Languages",
-    "Visualization"
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "dependency injection",
+    "dotnet",
+    "csharp",
+    "analysis",
+    "visualization"
   ],
   "activationEvents": [
-    "onStartupFinished",
     "workspaceContains:**/*.csproj",
-    "workspaceContains:**/*.sln"
+    "workspaceContains:**/*.sln",
+    "workspaceContains:**/*.slnx"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "di-navigator.selectProject",
-        "title": "DI Navigator: Select Project"
+        "command": "di-navigator.analyzeProject",
+        "title": "Analyze Project",
+        "category": "DI Navigator"
       },
       {
-        "command": "di-navigator.clearProjectSelection",
-        "title": "DI Navigator: Clear Project Selection"
+        "command": "di-navigator.analyzeSolution",
+        "title": "Analyze Solution",
+        "category": "DI Navigator"
       },
       {
-        "command": "di-navigator.refreshServices",
-        "title": "DI Navigator: Refresh Services"
+        "command": "di-navigator.findInjectionSites",
+        "title": "Find Injection Sites",
+        "category": "DI Navigator"
       },
       {
-        "command": "di-navigator.goToImplementation",
-        "title": "DI Navigator: Go to Implementation"
+        "command": "di-navigator.detectConflicts",
+        "title": "Detect Conflicts",
+        "category": "DI Navigator"
       },
       {
-        "command": "di-navigator.goToInjectionSite",
-        "title": "DI Navigator: Go to Injection Site"
+        "command": "di-navigator.openConfiguration",
+        "title": "Open Configuration",
+        "category": "DI Navigator"
       },
       {
-        "command": "di-navigator.resolveConflicts",
-        "title": "DI Navigator: Resolve Conflicts"
+        "command": "di-navigator.refreshTreeView",
+        "title": "Refresh Analysis",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.showServiceDetails",
+        "title": "Show Service Details",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.navigateToServiceRegistration",
+        "title": "Navigate to Registration",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.showServiceSummary",
+        "title": "Show Service Summary",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.showServiceConflicts",
+        "title": "Show Service Conflicts",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.searchServices",
+        "title": "Search Services",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.filterByLifetime",
+        "title": "Filter by Lifetime",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.showDependencyGraph",
+        "title": "Show Dependency Graph",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.exportAnalysis",
+        "title": "Export Analysis Results",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.showTreeView",
+        "title": "Show DI Navigator View",
+        "category": "DI Navigator"
+      },
+      {
+        "command": "di-navigator.recreateTreeView",
+        "title": "Recreate Tree View (Troubleshooting)",
+        "category": "DI Navigator"
       }
     ],
-    "views": {
-      "explorer": [
+    "menus": {
+      "explorer/context": [
         {
-          "id": "diNavigator",
-          "name": "DI Navigator",
-          "icon": "./icon.png",
-          "when": "diNavigator:validWorkspace"
+          "when": "resourceExtname == .csproj",
+          "command": "di-navigator.analyzeProject",
+          "group": "di-navigator"
+        },
+        {
+          "when": "resourceExtname == .sln || resourceExtname == .slnx",
+          "command": "di-navigator.analyzeSolution",
+          "group": "di-navigator"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "di-navigator.refreshTreeView",
+          "when": "view == di-navigator-tree-view",
+          "group": "navigation"
         }
       ]
-    }
-  },
-  "configuration": {
-    "title": "DI Navigator",
-    "properties": {
-      "diNavigator.excludeFolders": {
-        "type": "array",
-        "default": [
-          "**/bin/**",
-          "**/obj/**",
-          "**/Properties/**"
-        ],
-        "description": "Glob patterns for folders to exclude from file scanning (e.g., build artifacts).",
-        "items": {
-          "type": "string"
+    },
+    "views": {
+      "di-navigator": [
+        {
+          "id": "di-navigator-tree-view",
+          "name": "DI Services",
+          "icon": "$(dependency)"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "di-navigator",
+          "title": "DI Navigator",
+          "icon": "./extension-icon.png"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DI Navigator",
+      "properties": {
+        "di-navigator.useExternalTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable external Roslyn tool for enhanced analysis"
+        },
+        "di-navigator.autoRefresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically refresh analysis when .cs files change"
+        },
+        "di-navigator.refreshInterval": {
+          "type": "number",
+          "default": 5000,
+          "description": "Auto-refresh interval in milliseconds"
+        },
+        "di-navigator.logLevel": {
+          "type": "string",
+          "default": "Info",
+          "enum": [
+            "Debug",
+            "Info",
+            "Warning",
+            "Error"
+          ],
+          "description": "Minimum log level to display"
+        },
+        "di-navigator.enableCaching": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable caching for better performance"
+        },
+        "di-navigator.cacheExpirationMinutes": {
+          "type": "number",
+          "default": 30,
+          "description": "Cache expiration time in minutes"
+        },
+        "di-navigator.enableParallelProcessing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable parallel processing for better performance"
+        },
+        "di-navigator.maxDegreeOfParallelism": {
+          "type": "number",
+          "default": -1,
+          "description": "Maximum degree of parallelism (-1 for unlimited)"
+        },
+        "di-navigator.pluginDirectory": {
+          "type": "string",
+          "default": "plugins",
+          "description": "Directory to load plugins from"
+        },
+        "di-navigator.enablePlugins": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable plugin system"
+        },
+        "di-navigator.analyzeThirdPartyContainers": {
+          "type": "boolean",
+          "default": false,
+          "description": "Analyze third-party DI containers (Autofac, Ninject, etc.)"
+        },
+        "di-navigator.includeSourceCodeInOutput": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include source code snippets in analysis output"
+        },
+        "di-navigator.outputFormat": {
+          "type": "string",
+          "default": "Json",
+          "enum": [
+            "Json",
+            "Xml",
+            "Csv"
+          ],
+          "description": "Output format for analysis results"
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
-    "watch": "npm-run-all -p watch:*",
-    "watch:esbuild": "node esbuild.js --watch",
-    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
-    "compile-tests": "tsc -p . --outDir out",
-    "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint src",
-    "test": "node --no-warnings .vscode-test.mjs"
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
+    "build-roslyn-tool": "cd roslyn-tool && dotnet build",
+    "test-roslyn-tool": "cd roslyn-tool && dotnet run -- --input ../test-project",
+    "package-with-roslyn": "npm run build-roslyn-tool && npm run compile && vsce package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "24.5.1",
+    "@types/node": "24.5.2",
     "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.104.0",
-    "@typescript-eslint/eslint-plugin": "^8.44.0",
-    "@typescript-eslint/parser": "^8.44.0",
+    "@typescript-eslint/eslint-plugin": "^8.44.1",
+    "@typescript-eslint/parser": "^8.44.1",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
-    "esbuild": "^0.25.9",
-    "eslint": "^9.35.0",
+    "esbuild": "^0.25.10",
+    "eslint": "^9.36.0",
     "npm-run-all": "^4.1.5",
     "sinon": "^21.0.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@vscode/vsce": "^3.6.2"
   }
 }
