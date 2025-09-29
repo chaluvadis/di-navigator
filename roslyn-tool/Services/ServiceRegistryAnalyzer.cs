@@ -48,6 +48,44 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                 return CreateServiceRegistration(
                     genericArgs[0], genericArgs[1], lifetime, methodName, filePath, lineNumber);
             }
+            else if (genericArgs.Count == 1)
+            {
+                // Handle cases like AddScoped<IMyService>(factory) where IMyService is a generic type argument
+                var serviceTypeFromGeneric = genericArgs[0];
+
+                // Check if there are additional arguments (factory methods)
+                if (arguments.Count >= 1)
+                {
+                    var factoryArg = arguments[0];
+                    var hasLambdaExpression = factoryArg.Expression is LambdaExpressionSyntax ||
+                        HasNestedLambdaExpression(factoryArg.Expression) ||
+                        factoryArg.Expression.ToString().Contains("=>");
+
+                    if (hasLambdaExpression)
+                    {
+                        // Extract the implementation type from the lambda
+                        var lambdaImplementationType = ExtractTypeFromLambdaExpression((LambdaExpressionSyntax)factoryArg.Expression);
+
+                        // If we still can't extract the implementation type, try to get it from the lambda body
+                        if (string.IsNullOrEmpty(lambdaImplementationType) || lambdaImplementationType == "FactoryMethod")
+                        {
+                            if (factoryArg.Expression is LambdaExpressionSyntax lambdaExpr && lambdaExpr.Body is ExpressionSyntax lambdaBody)
+                            {
+                                lambdaImplementationType = ExtractTypeFromLambdaBody(lambdaBody);
+                            }
+                        }
+
+                        // Final fallback: if we still don't have a good implementation type, use the service type
+                        if (string.IsNullOrEmpty(lambdaImplementationType) || lambdaImplementationType == "FactoryMethod")
+                        {
+                            lambdaImplementationType = serviceTypeFromGeneric;
+                        }
+
+                        return CreateServiceRegistration(
+                            serviceTypeFromGeneric, lambdaImplementationType, lifetime, methodName, filePath, lineNumber);
+                    }
+                }
+            }
         }
 
         // Handle different argument patterns
@@ -74,10 +112,28 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
             {
                 // For lambda expressions, try to extract the actual service type from the first argument
                 var firstArgType = ExtractTypeFromExpression(firstArg.Expression);
-                var lambdaServiceType = !string.IsNullOrEmpty(firstArgType) ? firstArgType : methodName;
+                var lambdaServiceType = !string.IsNullOrEmpty(firstArgType) ? firstArgType : "Unknown";
+
+                // Extract the actual implementation type from the lambda body
+                var lambdaImplementationType = ExtractTypeFromLambdaExpression((LambdaExpressionSyntax)secondArg.Expression);
+
+                // If we still can't extract the implementation type, try to get it from the lambda body
+                if (string.IsNullOrEmpty(lambdaImplementationType) || lambdaImplementationType == "FactoryMethod")
+                {
+                    if (secondArg.Expression is LambdaExpressionSyntax lambdaExpr && lambdaExpr.Body is ExpressionSyntax lambdaBody)
+                    {
+                        lambdaImplementationType = ExtractTypeFromLambdaBody(lambdaBody);
+                    }
+                }
+
+                // Final fallback: if we still don't have a good implementation type, use the service type
+                if (string.IsNullOrEmpty(lambdaImplementationType) || lambdaImplementationType == "FactoryMethod")
+                {
+                    lambdaImplementationType = lambdaServiceType;
+                }
 
                 return CreateServiceRegistration(
-                    lambdaServiceType, methodName, lifetime, methodName, filePath, lineNumber);
+                    lambdaServiceType, lambdaImplementationType, lifetime, methodName, filePath, lineNumber);
             }
 
             // If serviceType is empty (e.g., from builder.Configuration), use method name for service identification
@@ -435,6 +491,13 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
                     return serviceType;
                 }
 
+                // If not found, try to extract from the invocation expression itself
+                var invocationServiceType = ExtractServiceTypeFromInvocation(invocation);
+                if (invocationServiceType != null)
+                {
+                    return invocationServiceType;
+                }
+
                 return ExtractTypeFromLambdaBody(invocation.Expression);
             }
 
@@ -492,10 +555,26 @@ public class ServiceRegistryAnalyzer : IServiceRegistryAnalyzer
         // Check if this is a GetService or GetRequiredService call
         if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
             (memberAccess.Name.ToString().Contains("GetService") ||
-             memberAccess.Name.ToString().Contains("GetRequiredService")) &&
-            memberAccess.Name is GenericNameSyntax genericName)
+             memberAccess.Name.ToString().Contains("GetRequiredService")))
         {
-            return genericName.TypeArgumentList.Arguments.FirstOrDefault()?.ToString();
+            if (memberAccess.Name is GenericNameSyntax genericName)
+            {
+                // Handle generic calls like GetRequiredService<SystemMonitoringService>()
+                var typeArg = genericName.TypeArgumentList.Arguments.FirstOrDefault();
+                if (typeArg != null)
+                {
+                    return typeArg.ToString();
+                }
+            }
+            else if (invocation.ArgumentList.Arguments.Count > 0)
+            {
+                // Handle non-generic calls like GetRequiredService(typeof(SystemMonitoringService))
+                var firstArg = invocation.ArgumentList.Arguments[0];
+                if (firstArg.Expression is TypeOfExpressionSyntax typeOfExpr)
+                {
+                    return typeOfExpr.Type.ToString();
+                }
+            }
         }
 
         return null;

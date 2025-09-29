@@ -4,15 +4,11 @@ public class UserExampleTest
 {
     public void ConfigureServices(IServiceCollection services)
     {
-        // User's first example
-        services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
-
-        // User's second example
-        services.AddQuartz(q =>
-        {
-            q.UseSimpleTypeLoader();
-            q.UseInMemoryStore();
-            q.UseDefaultThreadPool(tp => tp.MaxConcurrency = 10);
-        });
+        // This is the user's exact example that has the issue
+        services.AddScoped<UserExampleService>();
+        services.AddScoped<IUserExampleService>(sp => sp.GetRequiredService<UserExampleService>());
     }
 }
+
+public interface IUserExampleService { }
+public class UserExampleService : IUserExampleService { }

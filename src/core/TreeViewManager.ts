@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Logger } from './Logger';
-import { WorkspaceAnalysis } from '../models';
+import { WorkspaceAnalysis } from './models';
 
 export class TreeViewManager {
     private readonly context: vscode.ExtensionContext;
@@ -9,7 +9,6 @@ export class TreeViewManager {
     private treeView: vscode.TreeView<DINavigatorTreeItem> | null = null;
     private currentAnalysisData: WorkspaceAnalysis | null = null;
     private currentWorkspaceFolder: string | null = null;
-
     constructor(context: vscode.ExtensionContext, logger: Logger) {
         this.context = context;
         this.logger = logger;
@@ -25,15 +24,11 @@ export class TreeViewManager {
             case 'Transient':
                 return 'symbol-method'; // Represents the factory method pattern often used
             case 'Others':
-                return 'symbol-namespace'; // Represents general .NET constructs
+                return 'symbol-property'; // Represents miscellaneous services (configuration, hosted services, etc.)
             default:
-                return 'symbol-namespace';
+                return 'symbol-property';
         }
     }
-
-    /**
-     * Update the current workspace context
-     */
     private updateCurrentWorkspace(): void {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
@@ -56,16 +51,11 @@ export class TreeViewManager {
             this.clear();
         }
     }
-
-    /**
-     * Load workspace-specific data
-     */
     private loadWorkspaceData(): void {
         if (!this.currentWorkspaceFolder) {
             this.clear();
             return;
         }
-
         const storedData = this.loadAnalysisDataFromStorage();
         if (storedData) {
             this.currentAnalysisData = storedData;
@@ -77,12 +67,8 @@ export class TreeViewManager {
         }
     }
 
-    /**
-     * Initialize the tree view manager
-     */
     initialize(): void {
         this.logger.info('Initializing TreeViewManager...');
-
         try {
             // Create tree data provider
             this.treeDataProvider = new DINavigatorTreeProvider(this.logger, this);
@@ -100,9 +86,6 @@ export class TreeViewManager {
                 hasProvider: !!this.treeDataProvider,
                 hasView: !!this.treeView
             });
-
-            // Add context menu commands
-            this.addContextMenuCommands();
 
             // Handle tree item selection
             this.treeView.onDidChangeSelection((event) => {
@@ -126,29 +109,14 @@ export class TreeViewManager {
                 totalProjects: 0,
                 analysisTimestamp: new Date()
             });
-
             // Force refresh to ensure tree view displays
             this.treeDataProvider.refresh();
-
             this.logger.info('TreeViewManager initialized successfully');
         } catch (error) {
             this.logger.error('Failed to initialize TreeViewManager', 'TreeViewManager', error);
             throw error;
         }
     }
-    /**
-     * Add context menu commands for tree items
-     */
-    private addContextMenuCommands(): void {
-        try {
-            // Context menus are handled through the package.json menus section
-            // and command registrations in DINavigatorExtension.ts
-            this.logger.debug('Context menu commands configured via package.json', 'TreeViewManager');
-        } catch (error) {
-            this.logger.error('Failed to setup context menu commands', 'TreeViewManager', error);
-        }
-    }
-
     updateAnalysisData(analysisData: WorkspaceAnalysis): void {
         // Validate workspace context before updating data
         this.updateCurrentWorkspace();
@@ -186,8 +154,12 @@ export class TreeViewManager {
         // Save to workspace-specific storage
         this.saveAnalysisDataToStorage();
 
-        // Log final data structure with service symbols
-        this.logFinalDataStructure(analysisData);
+        // Log essential summary instead of verbose structure
+        this.logger.info('Analysis data updated successfully', 'TreeViewManager', {
+            totalServices: analysisData.totalServices,
+            totalProjects: analysisData.totalProjects,
+            workspace: this.currentWorkspaceFolder
+        });
 
         this.logger.info('Tree view data updated', 'TreeViewManager', {
             serviceCount: analysisData.totalServices,
@@ -195,74 +167,15 @@ export class TreeViewManager {
             workspace: this.currentWorkspaceFolder
         });
     }
-
-    /**
-     * Get the current analysis data
-     * @returns Current analysis data or null
-     */
     getCurrentAnalysisData(): WorkspaceAnalysis | null {
         return this.currentAnalysisData;
     }
-
-    /**
-     * Log the final data structure with service symbols
-     * @param analysisData Analysis data to log
-     */
-    private logFinalDataStructure(analysisData: WorkspaceAnalysis): void {
-        this.logger.info('=== Final Data Structure with Service Symbols ===', 'TreeViewManager');
-
-        if (!analysisData || !analysisData.projects) {
-            this.logger.info('No analysis data available', 'TreeViewManager');
-            return;
-        }
-
-        analysisData.projects.forEach((project, projectIndex) => {
-            this.logger.info(`Project ${projectIndex + 1}: ${project.projectName}`, 'TreeViewManager', {
-                path: project.projectPath,
-                totalServices: project.serviceGroups.reduce((acc, group) => acc + group.services.length, 0)
-            });
-
-            project.serviceGroups.forEach((group) => {
-                const symbol = this.getServiceIcon(group.lifetime);
-                this.logger.info(`  Group: ${group.lifetime} (${group.services.length} services) [${symbol}]`, 'TreeViewManager');
-
-                // Debug: Log the actual lifetime values
-                console.debug(`TreeView: Group lifetime = "${group.lifetime}" (type: ${typeof group.lifetime})`);
-
-                group.services.forEach((service) => {
-                    const lifetime = service.registrations[0]?.lifetime || 'Others';
-                    const serviceSymbol = this.getServiceIcon(lifetime);
-                    const registrationCount = service.registrations.length;
-                    const injectionCount = service.injectionSites.length;
-
-                    this.logger.info(`    Service: ${service.name} [${serviceSymbol}]`, 'TreeViewManager', {
-                        registrations: registrationCount,
-                        injections: injectionCount,
-                        lifetime: lifetime
-                    });
-                });
-            });
-        });
-
-        this.logger.info(`Total Projects: ${analysisData.totalProjects}`, 'TreeViewManager');
-        this.logger.info(`Total Services: ${analysisData.totalServices}`, 'TreeViewManager');
-        this.logger.info('=== End Data Structure ===', 'TreeViewManager');
-    }
-
-    /**
-     * Refresh the tree view
-     */
     refresh(): void {
         this.treeDataProvider?.refresh();
         this.logger.debug('Tree view refreshed', 'TreeViewManager');
     }
-
-    /**
-     * Ensure the tree view is visible to the user
-     */
     async ensureVisible(): Promise<void> {
         if (this.treeView) {
-            // Try to reveal the tree view
             await vscode.commands.executeCommand('workbench.view.explorer');
             await vscode.commands.executeCommand('di-navigator-tree-view.focus');
             this.logger.info('Tree view visibility ensured', 'TreeViewManager');
@@ -270,43 +183,15 @@ export class TreeViewManager {
             this.logger.warn('Tree view not initialized, cannot ensure visibility', 'TreeViewManager');
         }
     }
-
-    /**
-     * Clear the tree view data
-     */
     clear(): void {
         this.currentAnalysisData = null;
         this.treeDataProvider?.refresh();
-
-        // Clear workspace-specific storage
         if (this.currentWorkspaceFolder) {
             const storageKey = this.getWorkspaceStorageKey();
             this.context.workspaceState.update(storageKey, undefined);
         }
-
         this.logger.info('Tree view cleared', 'TreeViewManager');
     }
-
-    /**
-     * Clear data for a specific workspace
-     * @param workspaceFolder Workspace folder path to clear data for
-     */
-    clearWorkspaceData(workspaceFolder: string): void {
-        if (this.currentWorkspaceFolder === workspaceFolder) {
-            this.clear();
-        }
-    }
-
-    /**
-     * Check if current workspace has analysis data
-     */
-    hasWorkspaceData(): boolean {
-        return this.currentAnalysisData !== null && this.currentWorkspaceFolder !== null;
-    }
-
-    /**
-     * Get workspace-specific storage key for analysis data
-     */
     private getWorkspaceStorageKey(): string {
         if (!this.currentWorkspaceFolder) {
             return 'di-navigator-analysis-data';
@@ -315,10 +200,6 @@ export class TreeViewManager {
         const workspaceHash = require('crypto').createHash('md5').update(this.currentWorkspaceFolder).digest('hex');
         return `di-navigator-analysis-data-${workspaceHash}`;
     }
-
-    /**
-     * Save analysis data to workspace-specific storage
-     */
     private saveAnalysisDataToStorage(): void {
         if (!this.currentWorkspaceFolder || !this.currentAnalysisData) {
             return;
@@ -338,10 +219,6 @@ export class TreeViewManager {
             this.logger.error('Failed to save analysis data to storage', 'TreeViewManager', error);
         }
     }
-
-    /**
-     * Load analysis data from workspace-specific storage
-     */
     private loadAnalysisDataFromStorage(): WorkspaceAnalysis | null {
         if (!this.currentWorkspaceFolder) {
             return null;
@@ -361,11 +238,6 @@ export class TreeViewManager {
 
         return null;
     }
-
-    /**
-     * Handle tree item selection
-     * @param selection Selected tree items
-     */
     private handleTreeSelection(selection: readonly DINavigatorTreeItem[]): void {
         try {
             if (selection.length === 0) {
@@ -411,11 +283,6 @@ export class TreeViewManager {
             this.logger.error('Error handling tree selection', 'TreeViewManager', error);
         }
     }
-
-    /**
-     * Handle info selection (welcome messages, etc.)
-     * @param item Selected info item
-     */
     private handleInfoSelection(item: DINavigatorTreeItem): void {
         try {
             const label = typeof item.label === 'string' ? item.label : item.label?.label || 'Unknown';
@@ -440,11 +307,6 @@ export class TreeViewManager {
             this.logger.error('Error handling info selection', 'TreeViewManager', error);
         }
     }
-
-    /**
-     * Handle project selection
-     * @param item Selected project item
-     */
     private handleProjectSelection(item: DINavigatorTreeItem): void {
         try {
             if (!item.projectData) {
@@ -468,11 +330,6 @@ export class TreeViewManager {
             this.logger.error('Error handling project selection', 'TreeViewManager', error);
         }
     }
-
-    /**
-     * Handle service selection
-     * @param item Selected service item
-     */
     private handleServiceSelection(item: DINavigatorTreeItem): void {
         try {
             if (!item.serviceData) {
@@ -494,12 +351,6 @@ export class TreeViewManager {
             vscode.window.showErrorMessage('Error handling service selection');
         }
     }
-
-
-    /**
-      * Show detailed service information
-      * @param service Service data
-      */
     public async showServiceDetails(service: any): Promise<void> {
         const registrations = service.registrations
             .map((r: any, i: number) => {
@@ -596,22 +447,6 @@ export class TreeViewManager {
         channel.appendLine(`====================================`);
         channel.show();
     }
-
-    /**
-      * Show service summary in output channel
-      * @param service Service data
-      */
-    public showServiceSummary(service: any): void {
-        const channel = vscode.window.createOutputChannel('DI Navigator');
-        channel.clear();
-        channel.appendLine(`=== Service Summary: ${service.name} ===`);
-        channel.appendLine(`Lifetime: ${service.registrations[0]?.lifetime || 'Unknown'}`);
-        channel.appendLine(`Total Registrations: ${service.registrations.length}`);
-        channel.appendLine(`Total Injection Sites: ${service.injectionSites.length}`);
-        channel.appendLine(`====================================`);
-        channel.show();
-    }
-
 
     /**
      * Handle registration selection
@@ -749,17 +584,10 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
     private analysisData: WorkspaceAnalysis | null = null;
     private onDidChangeTreeDataEmitter = new vscode.EventEmitter<DINavigatorTreeItem | undefined | null>();
     public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
-
     constructor(logger: Logger, treeViewManager: TreeViewManager) {
         this.logger = logger;
         this.treeViewManager = treeViewManager;
     }
-
-    /**
-     * Get tree item for the given element
-     * @param element Tree item element
-     * @returns VSCode tree item
-     */
     getTreeItem(element: DINavigatorTreeItem): vscode.TreeItem {
         return element;
     }
@@ -1046,12 +874,18 @@ class DINavigatorTreeProvider implements vscode.TreeDataProvider<DINavigatorTree
             if (service.registrations && Array.isArray(service.registrations)) {
                 service.registrations.forEach((registration: any) => {
                     try {
-                        // Use the service name (which should be the method name for factory methods)
-                        // This avoids the complex cleanup logic that was causing display issues
-                        const methodCall = service.name || registration.methodCall || 'Unknown';
+                        // Create a more descriptive label showing service type and implementation type
+                        const serviceType = registration.serviceType || service.name || 'Unknown';
+                        const implementationType = registration.implementationType || 'Unknown';
+                        const methodCall = registration.methodCall || 'Unknown';
 
-                        const label = `Registration : ${methodCall}`;
-                        const tooltip = `${registration.filePath || 'Unknown'}:${registration.lineNumber || 0}`;
+                        // For factory methods, show the service type and implementation type
+                        let label = `Registration: ${serviceType}`;
+                        if (implementationType && implementationType !== serviceType && implementationType !== 'FactoryMethod') {
+                            label += ` → ${implementationType}`;
+                        }
+
+                        const tooltip = `${methodCall} in ${registration.filePath || 'Unknown'}:${registration.lineNumber || 0}`;
 
                         items.push(new DINavigatorTreeItem(
                             label,

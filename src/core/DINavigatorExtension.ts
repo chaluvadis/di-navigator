@@ -6,7 +6,7 @@ import { ErrorHandler } from './ErrorHandler';
 import { TreeViewManager } from './TreeViewManager';
 import { AnalysisService } from './AnalysisService';
 import { DataValidator } from './DataValidator';
-import { WorkspaceAnalysis } from '../models';
+import { WorkspaceAnalysis } from './models';
 
 export class DINavigatorExtension {
     private readonly context: vscode.ExtensionContext;
@@ -15,14 +15,11 @@ export class DINavigatorExtension {
     private readonly treeViewManager: TreeViewManager;
     private readonly analysisService: AnalysisService;
     private readonly dataValidator: DataValidator;
-
     private _isInitialized = false;
     private isDisposed = false;
-
     public get isInitialized(): boolean {
         return this._isInitialized;
     }
-
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
 
@@ -30,10 +27,9 @@ export class DINavigatorExtension {
         this.logger = new Logger();
         this.errorHandler = new ErrorHandler(this.logger);
         this.treeViewManager = new TreeViewManager(this.context, this.logger);
-        this.analysisService = new AnalysisService(this.logger, this.errorHandler);
-        this.dataValidator = new DataValidator(this.logger);
+        this.analysisService = new AnalysisService();
+        this.dataValidator = new DataValidator();
     }
-
     async initialize(): Promise<void> {
         if (this._isInitialized) {
             this.logger.warn('Extension is already initialized');
@@ -59,10 +55,10 @@ export class DINavigatorExtension {
             // Initialize tree view first
             this.treeViewManager.initialize();
 
-            // Ensure tree view is visible immediately
-            setTimeout(() => {
-                this.treeViewManager.ensureVisible();
-            }, 1000);
+            // Ensure tree view is visible - using async approach instead of timeout
+            this.treeViewManager.ensureVisible().catch(error => {
+                this.logger.warn('Failed to ensure tree view visibility during initialization', 'DINavigatorExtension', error);
+            });
 
             // Initialize analysis service
             this.analysisService.initialize(workspaceRoot);
@@ -90,44 +86,67 @@ export class DINavigatorExtension {
             throw error;
         }
     }
-
     private registerCommands(): void {
-        // Helper function to register commands with error handling
-        const registerCommand = (id: string, handler: (...args: any[]) => any, title: string) => {
-            const disposable = vscode.commands.registerCommand(id, async (...args: any[]) => {
+        // Helper function to register commands with comprehensive error handling
+        const registerCommand = <TArgs extends any[], TResult>(
+            id: string,
+            handler: (...args: TArgs) => Promise<TResult> | TResult,
+            title: string
+        ) => {
+            const disposable = vscode.commands.registerCommand(id, async (...args: TArgs) => {
                 try {
-                    this.logger.debug(`Executing command: ${id}`);
+                    // Validate extension state before executing
+                    if (this.isDisposed) {
+                        throw new Error('Extension is disposed and cannot execute commands');
+                    }
+
+                    this.logger.debug(`Executing command: ${id}`, 'DINavigatorExtension', { args: args.length });
                     const result = await handler(...args);
-                    this.logger.debug(`Command completed: ${id}`);
+                    this.logger.debug(`Command completed successfully: ${id}`, 'DINavigatorExtension');
                     return result;
                 } catch (error) {
-                    this.logger.error(`Command failed: ${id}`, 'DINavigatorExtension', { error, args });
+                    const errorContext = {
+                        commandId: id,
+                        commandTitle: title,
+                        timestamp: new Date().toISOString(),
+                        args: args?.length || 0
+                    };
+
+                    this.logger.error(`Command failed: ${id}`, 'DINavigatorExtension', {
+                        error: error instanceof Error ? error.message : String(error),
+                        stack: error instanceof Error ? error.stack : undefined,
+                        context: errorContext
+                    });
+
                     const errorMessage = error instanceof Error ? error.message : String(error);
-                    vscode.window.showErrorMessage(`Command '${title}' failed: ${errorMessage}`);
-                    throw error;
+                    const userMessage = `Command '${title}' failed: ${errorMessage}`;
+
+                    // Show user-friendly error message but don't re-throw to prevent extension crashes
+                    vscode.window.showErrorMessage(userMessage, 'View Details').then(action => {
+                        if (action === 'View Details') {
+                            this.showCommandErrorDetails(id, title, error, args);
+                        }
+                    });
+
+                    // Return undefined instead of throwing to prevent command system crashes
+                    return undefined;
                 }
             });
+
             this.context.subscriptions.push(disposable);
             this.logger.info(`Registered command: ${id} (${title})`);
         };
 
         registerCommand(
             'di-navigator.analyzeProject',
-            () => this.analyzeProject(),
+            async () => {
+                if (!this._isInitialized) {
+                    vscode.window.showWarningMessage('DI Navigator is not initialized. Please wait for activation to complete.');
+                    return;
+                }
+                await this.analyzeProject();
+            },
             'Analyze the current .NET project for dependency injection configuration'
-        );
-
-        registerCommand(
-            'di-navigator.analyzeSolution',
-            () => this.analyzeSolution(),
-            'Analyze all projects in the .NET solution for dependency injection configuration'
-        );
-
-
-        registerCommand(
-            'di-navigator.findInjectionSites',
-            () => this.findInjectionSites(),
-            'Find and highlight all dependency injection sites in the project'
         );
 
         registerCommand(
@@ -150,26 +169,26 @@ export class DINavigatorExtension {
 
         registerCommand(
             'di-navigator.showServiceDetails',
-            (serviceItem: any) => this.showServiceDetails(serviceItem),
+            async (serviceItem: any) => {
+                if (!serviceItem?.serviceData) {
+                    vscode.window.showWarningMessage('No service data available');
+                    return;
+                }
+                await this.showServiceDetails(serviceItem);
+            },
             'Show detailed service information'
         );
 
         registerCommand(
             'di-navigator.navigateToServiceRegistration',
-            (serviceItem: any) => this.navigateToServiceRegistration(serviceItem),
+            async (serviceItem: any) => {
+                if (!serviceItem?.serviceData) {
+                    vscode.window.showWarningMessage('No service data available for navigation');
+                    return;
+                }
+                await this.navigateToServiceRegistration(serviceItem);
+            },
             'Navigate to service registration location'
-        );
-
-        registerCommand(
-            'di-navigator.showServiceSummary',
-            (serviceItem: any) => this.showServiceSummary(serviceItem),
-            'Show service summary information'
-        );
-
-        registerCommand(
-            'di-navigator.showServiceConflicts',
-            (serviceItem: any) => this.showServiceConflicts(serviceItem),
-            'Show service conflicts'
         );
 
         registerCommand(
@@ -190,11 +209,6 @@ export class DINavigatorExtension {
             'Show service dependency graph'
         );
 
-        registerCommand(
-            'di-navigator.exportAnalysis',
-            () => this.exportAnalysis(),
-            'Export analysis results to file'
-        );
 
         registerCommand(
             'di-navigator.showTreeView',
@@ -208,9 +222,26 @@ export class DINavigatorExtension {
             'Recreate the tree view (troubleshooting)'
         );
 
-        this.logger.info('All commands registered successfully');
-    }
+        const commandCount = 11; // Total number of commands registered
+        this.logger.info(`All ${commandCount} commands registered successfully`);
 
+        // Log command availability for debugging
+        this.logger.debug('Available DI Navigator commands:', 'DINavigatorExtension', {
+            commands: [
+                'di-navigator.analyzeProject',
+                'di-navigator.detectConflicts',
+                'di-navigator.openConfiguration',
+                'di-navigator.refreshTreeView',
+                'di-navigator.showServiceDetails',
+                'di-navigator.navigateToServiceRegistration',
+                'di-navigator.searchServices',
+                'di-navigator.filterByLifetime',
+                'di-navigator.showDependencyGraph',
+                'di-navigator.showTreeView',
+                'di-navigator.recreateTreeView'
+            ]
+        });
+    }
     private setupWorkspaceContext(): void {
         const hasWorkspace = vscode.workspace.workspaceFolders !== undefined;
         vscode.commands.executeCommand('setContext', 'diNavigator:validWorkspace', hasWorkspace);
@@ -220,28 +251,28 @@ export class DINavigatorExtension {
             vscode.commands.executeCommand('setContext', 'diNavigator:workspaceRoot', workspaceRoot);
         }
     }
-
     private setupAutoRefresh(): void {
         const config = vscode.workspace.getConfiguration('di-navigator');
         const autoRefresh = config.get('autoRefresh', false);
         if (autoRefresh) {
-            const refreshInterval = config.get('refreshInterval', 5000);
-
-            const intervalId = setInterval(() => {
-                if (vscode.window.activeTextEditor?.document.fileName.endsWith('.cs')) {
-                    this.analyzeProject();
+            // Use file watcher instead of polling interval for better efficiency
+            const fileWatcher = vscode.workspace.onDidSaveTextDocument(async (document) => {
+                try {
+                    // Only analyze if it's a C# file and we're properly initialized
+                    if (document.fileName.endsWith('.cs') && this._isInitialized && !this.isDisposed) {
+                        this.logger.debug('C# file saved, triggering auto-refresh analysis', 'DINavigatorExtension');
+                        await this.analyzeProject();
+                    }
+                } catch (error) {
+                    this.logger.warn('Auto-refresh analysis failed on file save', 'DINavigatorExtension', error);
                 }
-            }, refreshInterval);
-
-            // Store interval ID for cleanup
-            this.context.subscriptions.push({
-                dispose: () => clearInterval(intervalId)
             });
 
-            this.logger.info(`Auto-refresh enabled with ${refreshInterval}ms interval`);
+            // Store file watcher for cleanup
+            this.context.subscriptions.push(fileWatcher);
+            this.logger.info('Auto-refresh enabled using file watcher (on file save)');
         }
     }
-
     private setupConfigurationIntegration(): void {
         // Watch for configuration changes
         const configWatcher = vscode.workspace.onDidChangeConfiguration(event => {
@@ -249,7 +280,6 @@ export class DINavigatorExtension {
                 this.logger.info('DI Navigator configuration changed, reloading...');
 
                 // Reconfigure analyzer based on new settings
-                const useExternalTools = vscode.workspace.getConfiguration('di-navigator').get('useExternalTools', true);
                 // Update analyzer configuration here
 
                 this.logger.info('Configuration reloaded successfully');
@@ -258,10 +288,9 @@ export class DINavigatorExtension {
 
         this.context.subscriptions.push(configWatcher);
     }
-
     private setupWorkspaceChangeHandling(): void {
         // Handle workspace folder changes
-        const workspaceChangeListener = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+        const workspaceChangeListener = vscode.workspace.onDidChangeWorkspaceFolders(() => {
             const currentWorkspaceFolders = vscode.workspace.workspaceFolders;
 
             if (!currentWorkspaceFolders || currentWorkspaceFolders.length === 0) {
@@ -289,7 +318,6 @@ export class DINavigatorExtension {
         this.context.subscriptions.push(workspaceChangeListener);
         this.logger.info('Workspace change handling set up');
     }
-
     async analyzeProject(): Promise<void> {
         try {
             this.logger.info('Starting project analysis...');
@@ -300,7 +328,11 @@ export class DINavigatorExtension {
             }
 
             const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            const solutionPath = await this.findSolutionFile(workspaceRoot) || workspaceRoot;
+            const solutionPath = await this.findSolutionFile(workspaceRoot);
+
+            if (!solutionPath) {
+                throw new Error('No .NET solution (.sln, .slnx) or project (.csproj) files found in the current workspace. Please ensure you have opened a .NET project.');
+            }
 
             this.logger.info(`Analyzing workspace: ${workspaceRoot}`);
             this.logger.info(`Using solution/project file: ${solutionPath}`);
@@ -342,7 +374,6 @@ export class DINavigatorExtension {
                     reportProgress(currentStep++);
 
                     // Initialize analysis
-                    await new Promise(resolve => setTimeout(resolve, 100)); // Simulate work
                     reportProgress(currentStep++);
 
                     // Parse solution - now analyze as solution to get all projects
@@ -443,203 +474,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Project analysis failed');
         }
     }
-
-    async analyzeSolution(): Promise<void> {
-        try {
-            this.logger.info('Starting solution analysis...');
-
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders) {
-                throw new Error('No workspace folder found');
-            }
-
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            const solutionPath = await this.findSolutionFile(workspaceRoot);
-
-            if (!solutionPath) {
-                throw new Error('No .NET solution (.sln, .slnx) or project (.csproj) files found in workspace. Please ensure you have opened a .NET project.');
-            }
-
-            this.logger.info(`Using solution/project file: ${solutionPath}`);
-
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: 'DI Navigator: Analyzing solution...',
-                cancellable: true
-            }, async (progress, token) => {
-                // Check for cancellation
-                token.onCancellationRequested(() => {
-                    this.logger.info('Solution analysis cancelled by user');
-                    throw new Error('Analysis cancelled by user');
-                });
-
-                // Detailed progress steps
-                const progressSteps = [
-                    { message: 'Initializing solution analysis...', increment: 5 },
-                    { message: 'Parsing solution structure...', increment: 15 },
-                    { message: 'Analyzing all projects...', increment: 30 },
-                    { message: 'Detecting service registrations...', increment: 50 },
-                    { message: 'Finding injection sites...', increment: 65 },
-                    { message: 'Analyzing service lifetimes...', increment: 75 },
-                    { message: 'Detecting conflicts...', increment: 85 },
-                    { message: 'Processing results...', increment: 95 },
-                    { message: 'Finalizing analysis...', increment: 100 }
-                ];
-
-                let currentStep = 0;
-                const reportProgress = (stepIndex: number, additionalInfo?: string) => {
-                    const step = progressSteps[stepIndex];
-                    const message = additionalInfo ? `${step.message} ${additionalInfo}` : step.message;
-                    progress.report({ message, increment: step.increment });
-                };
-
-                let allProjects: any[];
-
-                try {
-                    reportProgress(currentStep++);
-
-                    // Initialize analysis
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                    reportProgress(currentStep++);
-
-                    // Analyze all projects in solution
-                    allProjects = await this.analysisService.analyzeSolution(solutionPath);
-                    reportProgress(currentStep++);
-
-                    if (allProjects.length === 0) {
-                        throw new Error('No projects found in solution');
-                    }
-
-                    // Analyze registrations across all projects
-                    const totalServices = allProjects.reduce((acc: number, project: any) =>
-                        acc + project.serviceGroups.reduce((acc2: number, group: any) => acc2 + group.services.length, 0), 0);
-                    reportProgress(currentStep++, `(${totalServices} services found in ${allProjects.length} projects)`);
-
-                    // Find injection sites
-                    const totalInjections = allProjects.reduce((acc: number, project: any) =>
-                        acc + project.serviceGroups.reduce((acc2: number, group: any) =>
-                            acc2 + group.services.reduce((acc3: number, service: any) => acc3 + service.injectionSites.length, 0), 0), 0);
-                    reportProgress(currentStep++, `(${totalInjections} sites found)`);
-
-                    // Analyze lifetimes
-                    const totalGroups = allProjects.reduce((acc: number, project: any) => acc + project.serviceGroups.length, 0);
-                    reportProgress(currentStep++, `(${totalGroups} groups)`);
-
-                    // Detect conflicts
-                    const totalConflicts = allProjects.reduce((acc: number, project: any) =>
-                        acc + (project.lifetimeConflicts?.length || 0) + (project.serviceDependencyIssues?.length || 0), 0);
-                    reportProgress(currentStep++, `(${totalConflicts} issues found)`);
-
-                    // Process results
-                    reportProgress(currentStep++);
-
-                    // Finalize
-                    reportProgress(currentStep++);
-
-                } catch (error) {
-                    progress.report({ message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, increment: 100 });
-                    throw error;
-                }
-
-                // Create workspace analysis with all projects
-                const workspaceAnalysis: WorkspaceAnalysis = {
-                    projects: allProjects,
-                    totalServices: allProjects.reduce((acc: number, project: any) =>
-                        acc + project.serviceGroups.reduce((acc2: number, group: any) => acc2 + group.services.length, 0), 0),
-                    totalProjects: allProjects.length,
-                    analysisTimestamp: new Date()
-                };
-
-                // Validate analysis data
-                const validationResult = this.dataValidator.validateWorkspaceAnalysis(workspaceAnalysis);
-
-                if (!validationResult.isValid) {
-                    this.logger.warn('Solution analysis data validation failed', 'DINavigatorExtension', {
-                        errorCount: validationResult.summary.errorCount,
-                        warningCount: validationResult.summary.warningCount
-                    });
-
-                    const errorIssues = validationResult.issues.filter((i: any) => i.severity === 'Error');
-                    if (errorIssues.length > 0) {
-                        const errorMessages = errorIssues.map((issue: any) => `• ${issue.message}`).join('\n');
-                        vscode.window.showWarningMessage(
-                            `DI Navigator: Solution analysis completed with ${errorIssues.length} data issues:\n${errorMessages}`,
-                            'View Details'
-                        ).then(selection => {
-                            if (selection === 'View Details') {
-                                this.showValidationDetails(validationResult);
-                            }
-                        });
-                    }
-                }
-
-                // Update tree view with all projects
-                this.treeViewManager.updateAnalysisData(workspaceAnalysis);
-
-                // Show results summary
-                const totalServices = workspaceAnalysis.totalServices;
-                const totalProjects = workspaceAnalysis.totalProjects;
-
-                vscode.window.showInformationMessage(
-                    `DI Navigator: Found ${totalServices} services across ${totalProjects} projects`
-                );
-
-                this.logger.info(`Solution analysis completed: ${totalServices} services across ${totalProjects} projects`);
-            });
-
-        } catch (error) {
-            this.errorHandler.handleError(error, 'Solution analysis failed');
-        }
-    }
-
-    async findInjectionSites(): Promise<void> {
-        try {
-            const analysisData = this.treeViewManager.getCurrentAnalysisData();
-            if (!analysisData) {
-                vscode.window.showWarningMessage('DI Navigator: Please run analysis first');
-                return;
-            }
-
-            const diagnostics = vscode.languages.createDiagnosticCollection('di-injection-sites');
-            const injectionDiagnostics: vscode.Diagnostic[] = [];
-
-            for (const project of analysisData.projects) {
-                for (const group of project.serviceGroups) {
-                    for (const service of group.services) {
-                        for (const site of service.injectionSites) {
-                            const uri = vscode.Uri.file(site.filePath);
-                            const range = new vscode.Range(
-                                new vscode.Position(site.lineNumber - 1, 0),
-                                new vscode.Position(site.lineNumber - 1, 100)
-                            );
-
-                            const diagnostic = new vscode.Diagnostic(
-                                range,
-                                `Injects ${site.serviceType}`,
-                                vscode.DiagnosticSeverity.Information
-                            );
-
-                            diagnostic.source = 'DI Service Navigator';
-                            injectionDiagnostics.push(diagnostic);
-
-                            // Group diagnostics by file
-                            const existingDiagnostics = diagnostics.get(uri) || [];
-                            diagnostics.set(uri, [...existingDiagnostics, diagnostic]);
-                        }
-                    }
-                }
-            }
-
-            vscode.window.showInformationMessage(
-                `DI Navigator: Found ${injectionDiagnostics.length} injection sites`
-            );
-
-            this.logger.info(`Found ${injectionDiagnostics.length} injection sites`);
-        } catch (error) {
-            this.errorHandler.handleError(error, 'Failed to find injection sites');
-        }
-    }
-
     async detectConflicts(): Promise<void> {
         try {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
@@ -706,7 +540,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to detect conflicts');
         }
     }
-
     async openConfiguration(): Promise<void> {
         try {
             await vscode.commands.executeCommand('workbench.action.openSettings', 'di-navigator');
@@ -714,7 +547,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to open configuration');
         }
     }
-
     refreshTreeView(): void {
         try {
             this.treeViewManager.refresh();
@@ -722,7 +554,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to refresh tree view');
         }
     }
-
     showServiceDetails(serviceItem: any): void {
         try {
             if (serviceItem && serviceItem.serviceData) {
@@ -733,7 +564,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to show service details');
         }
     }
-
     navigateToServiceRegistration(serviceItem: any): void {
         try {
             if (serviceItem && serviceItem.serviceData) {
@@ -744,32 +574,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to navigate to service registration');
         }
     }
-
-    showServiceSummary(serviceItem: any): void {
-        try {
-            if (serviceItem && serviceItem.serviceData) {
-                // Show service summary
-                this.treeViewManager.showServiceSummary(serviceItem.serviceData);
-            }
-        } catch (error) {
-            this.errorHandler.handleError(error, 'Failed to show service summary');
-        }
-    }
-
-    showServiceConflicts(serviceItem: any): void {
-        try {
-            if (serviceItem && serviceItem.serviceData) {
-                // Show service conflicts
-                this.treeViewManager.showServiceConflicts(serviceItem.serviceData);
-            }
-        } catch (error) {
-            this.errorHandler.handleError(error, 'Failed to show service conflicts');
-        }
-    }
-
-    /**
-     * Show validation details in output channel
-     */
     private showValidationDetails(validationResult: any): void {
         const channel = vscode.window.createOutputChannel('DI Navigator - Validation');
         channel.clear();
@@ -796,10 +600,46 @@ export class DINavigatorExtension {
         channel.appendLine('====================================');
         channel.show();
     }
+    private showCommandErrorDetails(commandId: string, commandTitle: string, error: any, args: any[]): void {
+        const channel = vscode.window.createOutputChannel('DI Navigator - Command Error');
+        channel.clear();
+        channel.appendLine('=== Command Error Details ===');
+        channel.appendLine(`Command ID: ${commandId}`);
+        channel.appendLine(`Command Title: ${commandTitle}`);
+        channel.appendLine(`Timestamp: ${new Date().toISOString()}`);
+        channel.appendLine(`Error Message: ${error instanceof Error ? error.message : String(error)}`);
+        channel.appendLine('');
 
-    /**
-     * Search services by name or pattern
-     */
+        if (error instanceof Error && error.stack) {
+            channel.appendLine('=== Stack Trace ===');
+            channel.appendLine(error.stack);
+            channel.appendLine('');
+        }
+
+        channel.appendLine('=== Command Arguments ===');
+        channel.appendLine(`Argument Count: ${args?.length || 0}`);
+        if (args && args.length > 0) {
+            args.forEach((arg, index) => {
+                channel.appendLine(`Arg ${index + 1}: ${typeof arg} - ${JSON.stringify(arg).substring(0, 200)}${JSON.stringify(arg).length > 200 ? '...' : ''}`);
+            });
+        }
+
+        channel.appendLine('');
+        channel.appendLine('=== Troubleshooting ===');
+        channel.appendLine('1. Check the VS Code Developer Console for additional error details');
+        channel.appendLine('2. Ensure you have a valid .NET project open');
+        channel.appendLine('3. Try running "DI Navigator: Analyze Project" first');
+        channel.appendLine('4. Check the extension logs in Output > Log (Window)');
+        channel.appendLine('');
+        channel.appendLine('=== Getting Help ===');
+        channel.appendLine('If this error persists, please report it with:');
+        channel.appendLine('• VS Code version');
+        channel.appendLine('• .NET SDK version');
+        channel.appendLine('• This error log');
+        channel.appendLine('');
+        channel.appendLine('====================================');
+        channel.show();
+    }
     async searchServices(): Promise<void> {
         try {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
@@ -874,10 +714,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to search services');
         }
     }
-
-    /**
-     * Filter services by lifetime
-     */
     async filterByLifetime(): Promise<void> {
         try {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
@@ -947,10 +783,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to filter services');
         }
     }
-
-    /**
-     * Show dependency graph visualization
-     */
     async showDependencyGraph(): Promise<void> {
         try {
             const analysisData = this.treeViewManager.getCurrentAnalysisData();
@@ -1000,78 +832,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to show dependency graph');
         }
     }
-
-    /**
-     * Export analysis results to file
-     */
-    async exportAnalysis(): Promise<void> {
-        try {
-            const analysisData = this.treeViewManager.getCurrentAnalysisData();
-            if (!analysisData) {
-                vscode.window.showWarningMessage('DI Navigator: Please run analysis first');
-                return;
-            }
-
-            // Get export format
-            const format = await vscode.window.showQuickPick(
-                [
-                    { label: 'JSON', description: 'JavaScript Object Notation', format: 'json' },
-                    { label: 'CSV', description: 'Comma Separated Values', format: 'csv' },
-                    { label: 'XML', description: 'Extensible Markup Language', format: 'xml' }
-                ],
-                {
-                    placeHolder: 'Select export format'
-                }
-            );
-
-            if (!format) {
-                return; // User cancelled
-            }
-
-            // Get save location
-            const uri = await vscode.window.showSaveDialog({
-                defaultUri: vscode.Uri.file(`di-analysis.${format.format}`),
-                filters: {
-                    'Export Files': [format.format],
-                    'All Files': ['*']
-                }
-            });
-
-            if (!uri) {
-                return; // User cancelled
-            }
-
-            // Generate export content based on format
-            let content: string;
-            switch (format.format) {
-                case 'json':
-                    content = JSON.stringify(analysisData, null, 2);
-                    break;
-                case 'csv':
-                    content = this.generateCsvContent(analysisData);
-                    break;
-                case 'xml':
-                    content = this.generateXmlContent(analysisData);
-                    break;
-                default:
-                    throw new Error(`Unsupported export format: ${format.format}`);
-            }
-
-            // Write to file
-            await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
-
-            vscode.window.showInformationMessage(
-                `DI Navigator: Analysis exported to ${uri.fsPath}`
-            );
-
-        } catch (error) {
-            this.errorHandler.handleError(error, 'Failed to export analysis');
-        }
-    }
-
-    /**
-      * Show the DI Navigator tree view
-      */
     async showTreeView(): Promise<void> {
         try {
             this.logger.info('Manually showing DI Navigator tree view');
@@ -1112,10 +872,6 @@ export class DINavigatorExtension {
             this.errorHandler.handleError(error, 'Failed to show tree view');
         }
     }
-
-    /**
-     * Force recreate the tree view (for troubleshooting)
-     */
     async recreateTreeView(): Promise<void> {
         try {
             this.logger.info('Force recreating tree view');
@@ -1134,45 +890,36 @@ export class DINavigatorExtension {
             // Initialize it
             treeViewManager.initialize();
 
-            // Show it
-            setTimeout(() => {
-                treeViewManager.ensureVisible();
-            }, 500);
+            // Show it - using async approach
+            treeViewManager.ensureVisible().catch(error => {
+                this.logger.warn('Failed to ensure tree view visibility after recreation', 'DINavigatorExtension', error);
+            });
 
             vscode.window.showInformationMessage('DI Navigator: Tree view recreated successfully');
         } catch (error) {
             this.errorHandler.handleError(error, 'Failed to recreate tree view');
         }
     }
-
-    /**
-      * Find .NET solution file in the workspace directory
-      * @param workspaceRoot Root directory to search in
-      * @returns Path to .sln file or null if not found
-      */
     private async findSolutionFile(workspaceRoot: string): Promise<string | null> {
         try {
-            // List all files in the workspace root
-            const files = await fs.promises.readdir(workspaceRoot);
-
-            // Look for solution files (.sln and .slnx)
-            const solutionFiles = files.filter((file: string) =>
+            // First, look for solution files (.sln and .slnx) in the root
+            const rootFiles = await fs.promises.readdir(workspaceRoot);
+            const solutionFiles = rootFiles.filter((file: string) =>
                 file.endsWith('.sln') || file.endsWith('.slnx')
             );
 
             if (solutionFiles.length > 0) {
-                // Return the first .sln file found
                 const solutionPath = path.join(workspaceRoot, solutionFiles[0]);
                 this.logger.info(`Found solution file: ${solutionPath}`);
                 return solutionPath;
             }
 
-            // If no .sln file found, look for .csproj files
-            const projectFiles = files.filter((file: string) => file.endsWith('.csproj'));
+            // If no solution files in root, look for .csproj files recursively
+            const projectFiles = await this.findProjectFilesRecursively(workspaceRoot);
 
             if (projectFiles.length > 0) {
                 // Return the first .csproj file found
-                const projectPath = path.join(workspaceRoot, projectFiles[0]);
+                const projectPath = projectFiles[0];
                 this.logger.info(`Found project file: ${projectPath}`);
                 return projectPath;
             }
@@ -1186,9 +933,29 @@ export class DINavigatorExtension {
         }
     }
 
-    /**
-      * Check if service name matches search query
-      */
+    private async findProjectFilesRecursively(dir: string): Promise<string[]> {
+        const projectFiles: string[] = [];
+
+        try {
+            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+
+                if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules' && entry.name !== 'bin' && entry.name !== 'obj') {
+                    // Recursively search subdirectories
+                    const subDirFiles = await this.findProjectFilesRecursively(fullPath);
+                    projectFiles.push(...subDirFiles);
+                } else if (entry.isFile() && entry.name.endsWith('.csproj')) {
+                    projectFiles.push(fullPath);
+                }
+            }
+        } catch (error) {
+            this.logger.error(`Error searching directory ${dir}`, 'DINavigatorExtension', error);
+        }
+
+        return projectFiles;
+    }
     private matchesSearchQuery(serviceName: string, query: string): boolean {
         const normalizedQuery = query.trim().toLowerCase();
 
@@ -1202,65 +969,6 @@ export class DINavigatorExtension {
         // Simple string matching
         return serviceName.toLowerCase().includes(normalizedQuery);
     }
-
-    /**
-     * Generate CSV content from analysis data
-     */
-    private generateCsvContent(analysisData: WorkspaceAnalysis): string {
-        const lines: string[] = [];
-
-        // Header
-        lines.push('Project,Service Name,Lifetime,Registration Count,Injection Count,Has Conflicts');
-
-        // Data rows
-        analysisData.projects.forEach(project => {
-            project.serviceGroups.forEach(group => {
-                group.services.forEach(service => {
-                    lines.push([
-                        project.projectName,
-                        service.name,
-                        group.lifetime,
-                        service.registrations.length.toString(),
-                        service.injectionSites.length.toString(),
-                        service.hasConflicts ? 'Yes' : 'No'
-                    ].join(','));
-                });
-            });
-        });
-
-        return lines.join('\n');
-    }
-
-    /**
-     * Generate XML content from analysis data
-     */
-    private generateXmlContent(analysisData: WorkspaceAnalysis): string {
-        let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-        xml += '<DependencyInjectionAnalysis>\n';
-
-        analysisData.projects.forEach(project => {
-            xml += `  <Project name="${project.projectName}" path="${project.projectPath}">\n`;
-
-            project.serviceGroups.forEach(group => {
-                xml += `    <ServiceGroup lifetime="${group.lifetime}">\n`;
-
-                group.services.forEach(service => {
-                    xml += `      <Service name="${service.name}" hasConflicts="${service.hasConflicts}">\n`;
-                    xml += `        <Registrations count="${service.registrations.length}" />\n`;
-                    xml += `        <InjectionSites count="${service.injectionSites.length}" />\n`;
-                    xml += '      </Service>\n';
-                });
-
-                xml += '    </ServiceGroup>\n';
-            });
-
-            xml += '  </Project>\n';
-        });
-
-        xml += '</DependencyInjectionAnalysis>';
-        return xml;
-    }
-
     dispose(): void {
         try {
             if (this.isDisposed) {

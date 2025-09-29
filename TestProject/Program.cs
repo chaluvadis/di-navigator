@@ -12,23 +12,23 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton<IUserService, UserService>();
 
         // Scoped services
-        services.AddScoped<IOrderService, OrderService>();
-        services.AddScoped<IEmailService, EmailService>();
+        services.AddScoped<IMyService, MyService>();
+        services.AddScoped<ISingletonService, SingletonService>();
 
         // Transient service
-        services.AddTransient<IOrderService, OrderService>(); // This will create a conflict to test
+        services.AddTransient<IMyService, MyService>(); // This will create a conflict to test
 
         // Services that should appear under "Others" - simplified for testing
         // These would normally require additional packages, but we're testing detection
 
         // Test lambda expressions as mentioned in the issue
         // Using types that exist in the project
-        services.AddSingleton<IUserService>(sp => new UserService());
-        services.AddScoped<IOrderService>(sp => new OrderService());
+        services.AddSingleton<IMyService>(sp => new MyService());
+        services.AddScoped<ISingletonService>(sp => new SingletonService());
 
         // Test the specific case mentioned by the user
         // This simulates: services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
-        services.AddSingleton<IUserService>(sp => sp.GetRequiredService<IUserService>());
+        services.AddSingleton<IMyService>(sp => sp.GetRequiredService<IMyService>());
 
         // Add the user's specific example that should show "AddSingleton" not "FactoryMethod"
         services.AddSingleton<INotificationService>(options =>
@@ -37,17 +37,14 @@ var host = Host.CreateDefaultBuilder(args)
             // This should be detected as a factory method and use "AddSingleton" as the service name
             return new NotificationService();
         });
+
+        // Add the user's specific problematic case
+        services.AddScoped<IMyService>(sp => sp.GetRequiredService<IMyService>());
+        services.AddScoped<ISingletonService>(sp => sp.GetRequiredService<ISingletonService>());
     })
     .Build();
 
 Console.WriteLine("Services registered successfully!");
 
-public interface IUserService { }
-public interface IOrderService { }
-public interface IEmailService { }
 public interface INotificationService { }
-
-public class UserService : IUserService { }
-public class OrderService : IOrderService { }
-public class EmailService : IEmailService { }
 public class NotificationService : INotificationService { }

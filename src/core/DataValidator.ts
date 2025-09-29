@@ -1,22 +1,13 @@
-import { ProjectDI, ServiceGroup, Service, WorkspaceAnalysis } from '../models';
-import { Logger } from './Logger';
+import {
+    ProjectDI, ServiceGroup,
+    Service, WorkspaceAnalysis,
+    ValidationIssue, ValidationResult
+} from './models';
 
 export class DataValidator {
-    constructor(private logger: Logger) {}
-
-    /**
-     * Validate complete workspace analysis data
-     */
+    constructor() { }
     validateWorkspaceAnalysis(data: WorkspaceAnalysis): ValidationResult {
         const issues: ValidationIssue[] = [];
-
-        this.logger.debug('Validating workspace analysis data', 'DataValidator', {
-            projectsCount: data.projects?.length || 0,
-            totalServices: data.totalServices,
-            totalProjects: data.totalProjects
-        });
-
-        // Validate basic structure
         if (!data.projects || !Array.isArray(data.projects)) {
             issues.push({
                 type: 'Structure',
@@ -25,7 +16,6 @@ export class DataValidator {
                 field: 'projects'
             });
         } else {
-            // Validate each project
             data.projects.forEach((project, index) => {
                 const projectIssues = this.validateProject(project, index);
                 issues.push(...projectIssues);
@@ -65,18 +55,9 @@ export class DataValidator {
                 infoCount: issues.filter(i => i.severity === 'Info').length
             }
         };
-
-        this.logger.debug('Data validation completed', 'DataValidator', {
-            isValid: result.isValid,
-            totalIssues: result.summary.totalIssues
-        });
-
         return result;
     }
 
-    /**
-     * Validate single project data
-     */
     private validateProject(project: ProjectDI, index: number): ValidationIssue[] {
         const issues: ValidationIssue[] = [];
 
@@ -108,32 +89,25 @@ export class DataValidator {
                 field: 'serviceGroups'
             });
         } else {
-            project.serviceGroups.forEach((group, groupIndex) => {
-                const groupIssues = this.validateServiceGroup(group, project.projectName, groupIndex);
+            project.serviceGroups.forEach((group) => {
+                const groupIssues = this.validateServiceGroup(group, project.projectName);
                 issues.push(...groupIssues);
             });
         }
-
-        // Validate enhanced features if present
         if (project.lifetimeConflicts) {
             const conflictIssues = this.validateLifetimeConflicts(project.lifetimeConflicts, project.projectName);
             issues.push(...conflictIssues);
         }
-
         return issues;
     }
 
-    /**
-     * Validate service group data
-     */
-    private validateServiceGroup(group: ServiceGroup, projectName: string, _groupIndex: number): ValidationIssue[] {
+    private validateServiceGroup(group: ServiceGroup, projectName: string): ValidationIssue[] {
         const issues: ValidationIssue[] = [];
-
         if (!group.lifetime) {
             issues.push({
                 type: 'Structure',
                 severity: 'Error',
-                message: `${projectName} Group ${_groupIndex + 1}: Missing lifetime`,
+                message: `${projectName} Group: Missing lifetime`,
                 field: 'lifetime'
             });
         }
@@ -142,7 +116,7 @@ export class DataValidator {
             issues.push({
                 type: 'Structure',
                 severity: 'Error',
-                message: `${projectName} Group ${_groupIndex + 1}: Invalid services array`,
+                message: `${projectName} Group: Invalid services array`,
                 field: 'services'
             });
         } else {
@@ -151,27 +125,21 @@ export class DataValidator {
                 issues.push({
                     type: 'Consistency',
                     severity: 'Warning',
-                    message: `${projectName} Group ${_groupIndex + 1}: Service count mismatch`,
+                    message: `${projectName} Group: Service count mismatch`,
                     field: 'count'
                 });
             }
 
             // Validate each service
             group.services.forEach((service, serviceIndex) => {
-                const serviceIssues = this.validateService(service, projectName, _groupIndex, serviceIndex);
+                const serviceIssues = this.validateService(service, projectName, serviceIndex);
                 issues.push(...serviceIssues);
             });
         }
-
         return issues;
     }
-
-    /**
-     * Validate service data
-     */
-    private validateService(service: Service, projectName: string, _groupIndex: number, serviceIndex: number): ValidationIssue[] {
+    private validateService(service: Service, projectName: string, serviceIndex: number): ValidationIssue[] {
         const issues: ValidationIssue[] = [];
-
         if (!service.name) {
             issues.push({
                 type: 'Structure',
@@ -210,16 +178,10 @@ export class DataValidator {
                 }
             });
         }
-
         return issues;
     }
-
-    /**
-     * Validate lifetime conflicts data
-     */
     private validateLifetimeConflicts(conflicts: any[], projectName: string): ValidationIssue[] {
         const issues: ValidationIssue[] = [];
-
         conflicts.forEach((conflict, index) => {
             if (!conflict.serviceType) {
                 issues.push({
@@ -239,25 +201,6 @@ export class DataValidator {
                 });
             }
         });
-
         return issues;
     }
-}
-
-export interface ValidationResult {
-    isValid: boolean;
-    issues: ValidationIssue[];
-    summary: {
-        totalIssues: number;
-        errorCount: number;
-        warningCount: number;
-        infoCount: number;
-    };
-}
-
-export interface ValidationIssue {
-    type: 'Structure' | 'Consistency' | 'Logic';
-    severity: 'Info' | 'Warning' | 'Error';
-    message: string;
-    field: string;
 }

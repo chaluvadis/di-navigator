@@ -120,3 +120,21 @@ export interface WorkspaceAnalysis {
     totalProjects: number;
     analysisTimestamp: Date;
 }
+
+export interface ValidationResult {
+    isValid: boolean;
+    issues: ValidationIssue[];
+    summary: {
+        totalIssues: number;
+        errorCount: number;
+        warningCount: number;
+        infoCount: number;
+    };
+}
+
+export interface ValidationIssue {
+    type: 'Structure' | 'Consistency' | 'Logic';
+    severity: 'Info' | 'Warning' | 'Error';
+    message: string;
+    field: string;
+}
