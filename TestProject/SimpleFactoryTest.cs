@@ -4,28 +4,14 @@ public class SimpleFactoryTest
 {
     public void ConfigureServices(IServiceCollection services)
     {
-        // This should show as "Others -- AddCors" not "Others -- FactoryMethod -- AddCors"
-        services.AddCors(options =>
-        {
-            options.AddPolicy(
-                "AllowAll",
-                policy =>
-                {
-                    policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
-                }
-            );
-        });
-
-        // This should show as "Others -- AddOpenApi" not "Others -- FactoryMethod -- AddOpenApi"
-        services.AddOpenApi(options =>
-        {
-            // Some configuration
-        });
-
-        // Regular service registration should still work
-        services.AddTransient<IMyService, MyService>();
+        // Test the user's specific problematic case
+        services.AddScoped<IFactoryTestService>(sp => sp.GetRequiredService<FactoryTestService>());
+        services.AddScoped<ICoreFactoryService>(sp => sp.GetRequiredService<CoreFactoryService>());
     }
 }
 
-public interface IMyService { }
-public class MyService : IMyService { }
+public interface IFactoryTestService { }
+public class FactoryTestService : IFactoryTestService { }
+
+public interface ICoreFactoryService { }
+public class CoreFactoryService : ICoreFactoryService { }

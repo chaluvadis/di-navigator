@@ -1,6 +1,10 @@
 # DI Service Navigator
 
-*Visualize and explore Dependency Injection registrations and injection sites in your C# projects.*
+**Advanced dependency injection analysis and visualization for .NET projects**
+
+[![Version 0.0.2](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/chaluvadis/di-navigator)
+[![VS Code](https://img.shields.io/badge/VS%20Code-1.104.0+-blue.svg)](https://code.visualstudio.com/)
+[![.NET](https://img.shields.io/badge/.NET-9.0+-purple.svg)](https://dotnet.microsoft.com/)
 
 ---
 
@@ -10,9 +14,11 @@
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Technical Details](#technical-details)
-- [Prerequisites](#prerequisites)
+- [Commands](#commands)
+- [Architecture](#architecture)
+- [Roslyn Tool](#roslyn-tool)
 - [Configuration](#configuration)
+- [Requirements](#requirements)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -21,169 +27,292 @@
 
 ## Overview
 
-**DI Service Navigator** is a Visual Studio Code extension designed to help .NET developers understand, visualize, and navigate Dependency Injection (DI) configurations in their projects. It scans C# code for Microsoft.Extensions.DependencyInjection registrations and injection sites, groups them by service lifetime, and provides an integrated tree view in the Explorer sidebar for easy navigation.
+**DI Navigator** is a powerful Visual Studio Code extension that provides comprehensive dependency injection analysis and visualization for .NET projects. Built with advanced Roslyn-based parsing, it offers deep insights into DI configurations, service lifetimes, injection patterns, and potential conflicts.
 
-This tool is particularly useful in large .NET solutions where DI setup is spread across multiple files, making it hard to track services, lifetimes, and dependencies.
+Perfect for large .NET solutions where DI setup spans multiple files and assemblies, making it challenging to track services, lifetimes, dependencies, and potential issues.
 
----
+<img src="./extension.gif" alt="extension">
 
 ## Features
 
-- **DI Registration Discovery**: Automatically detects service registrations using Roslyn-based parsing with regex fallback for robustness
-- **Injection Site Mapping**: Identifies constructor parameters and associates them with registered services
-- **Lifetime Grouping**: Organizes services by Singleton, Scoped, and Transient lifetimes
-- **Integrated Sidebar View**: Tree view appears directly in the Explorer sidebar without requiring additional activity bar icons
-- **Custom Icons**: Uses extension-specific icons for consistent branding throughout the interface
-- **Quick Navigation**: Click on services and registrations to jump directly to their locations in code
-- **Smart Analysis**: Automatically activates when C# projects are detected in the workspace
-- **Conflict Detection**: Identifies potential dependency injection conflicts and highlights them
+### 🔍 **Advanced Analysis**
+- **Multi-Project Support**: Analyze entire solutions with multiple projects simultaneously
+- **Roslyn-Powered Parsing**: Accurate AST-based analysis using custom Roslyn tool
+- **Lifetime Conflict Detection**: Identify problematic service lifetime configurations
+- **Service Dependency Analysis**: Track complex service relationships and dependencies
+- **Custom Registry Support**: Analyze third-party DI containers and custom registrations
+
+### 🎯 **Smart Discovery**
+- **Registration Detection**: Find service registrations across all project files
+- **Injection Site Mapping**: Locate constructor and property injection points
+- **Startup Configuration Analysis**: Parse Program.cs and Startup.cs configurations
+- **Metadata Extraction**: Capture project references, NuGet packages, and framework versions
+
+### 📊 **Rich Visualization**
+- **Interactive Tree View**: Hierarchical display of services by lifetime
+- **Progress Reporting**: Real-time analysis progress with detailed steps
+- **Service Details Panel**: Comprehensive information about each service
+- **Dependency Graph**: Visual representation of service relationships
+- **Conflict Reports**: Detailed conflict analysis with severity levels
+
+### ⚡ **Enhanced Productivity**
+- **Auto-Refresh**: Automatic analysis on file changes (configurable)
+- **Quick Navigation**: Jump directly to registration and injection locations
+- **Advanced Search**: Find services by name patterns with wildcards
+- **Lifetime Filtering**: Filter and focus on specific service lifetimes
+- **Data Validation**: Ensure analysis accuracy with built-in validation
+
+### 🛠️ **Developer Experience**
+- **Robust Error Handling**: Comprehensive error reporting and recovery
+- **Data Persistence**: Maintain analysis results across VS Code sessions
+- **Performance Optimized**: Efficient analysis with caching and parallel processing
+- **Extensible Architecture**: Plugin system for custom analyzers
 
 ---
 
 ## Installation
 
-1. Install the extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=chaluvadis.di-navigator) (once published) or sideload via VSIX
-2. Ensure .NET SDK 8.0+ is installed (required for the Roslyn parser build)
-3. Open a .NET workspace (containing .csproj or .sln files)
-4. The extension activates automatically when .NET projects are detected
-
+### From VSIX (Manual Install)
+1. Download the `.vsix` file from [GitHub Releases](https://github.com/chaluvadis/di-navigator/releases)
+2. Run: `code --install-extension di-navigator-2.0.0.vsix`
+3. Reload VS Code
 ---
 
 ## Usage
 
-1. **View Activation**: The "DI Services" section appears automatically in the Explorer sidebar when a .NET workspace is opened
-2. **Browse Services**: Expand the tree to explore:
-   - Service lifetimes (Singleton, Scoped, Transient)
-   - Individual services with registration and injection counts
-   - Registration locations and injection sites
-3. **Navigate Code**: Click on any item to jump directly to its location in the source code
-4. **Refresh Analysis**: Use the "DI Navigator: Refresh Tree View" command to update the analysis
+### Basic Workflow
+1. **Open Project**: Open a .NET solution or project in VS Code
+2. **Automatic Activation**: DI Navigator panel appears in the sidebar
+3. **View Services**: Expand tree to explore services by lifetime
+4. **Navigate Code**: Click items to jump to source locations
+5. **Analyze Changes**: Use commands to refresh or re-analyze
 
-Example Tree View:
+### Tree View Structure
 ```
-DI Services
-├── Singleton Services (2)
-│   ├── IUserService (1 registration, 3 injection sites)
-│   │   ├── Registration: Startup.cs:25
-│   │   ├── Injection: UserController.cs:15
-│   │   └── Injection: AdminController.cs:22
-│   └── IConfiguration (1 registration, 5 injection sites)
-│       └── Registration: Program.cs:12
-└── Scoped Services (3)
-    ├── IRepository<User> (2 registrations, 4 injection sites)
-    └── ...
+DI Navigator
+├── ProjectName (Services: 15, Projects: 1)
+│   ├── Singleton Services (3)
+│   │   ├── IUserService
+│   │   │   ├── Registrations (1)
+│   │   │   │   └── Program.cs:25 - AddSingleton<UserService>()
+│   │   │   └── Injection Sites (5)
+│   │   │       ├── UserController.cs:15 (constructor)
+│   │   │       └── AdminService.cs:8 (property)
+│   │   ├── IConfiguration
+│   │   │   ├── Registrations (1)
+│   │   │   └── Injection Sites (12)
+│   │   └── DatabaseContext
+│   │       ├── Registrations (1)
+│   │       └── Injection Sites (3)
+│   ├── Scoped Services (7)
+│   └── Transient Services (5)
+├── 🔍 Search Services
+├── ⚡ Refresh Analysis
+└── ⚙️ Configuration
 ```
+
+### Advanced Features
+- **Search**: Use "DI Navigator: Search Services" to find specific services
+- **Filter**: Filter services by lifetime using "DI Navigator: Filter by Lifetime"
+- **Conflicts**: View conflicts with "DI Navigator: Detect Conflicts"
+- **Graph**: See dependency relationships with "DI Navigator: Show Dependency Graph"
 
 ---
 
-## Technical Details
+## Commands
 
-- **Parsing Engine**: Custom Roslyn analyzer built in C# (located in `roslyn-tool/`) for accurate AST traversal with regex fallback
-- **Data Models**: Services organized by lifetime with detailed registration and injection site information
-- **Tree View**: Integrated sidebar implementation using VS Code's native tree view API
-- **Icon System**: Custom extension icons used throughout the interface for consistent branding
-- **Build Process**: TypeScript compilation via esbuild with integrated Roslyn tool building
+| Command | Description |
+|---------|-------------|
+| `DI Navigator: Analyze Project` | Analyze current .NET project |
+| `DI Navigator: Detect Conflicts` | Find DI configuration conflicts |
+| `DI Navigator: Search Services` | Search services by name/pattern |
+| `DI Navigator: Filter by Lifetime` | Filter services by lifetime |
+| `DI Navigator: Show Dependency Graph` | Display service dependency graph |
+| `DI Navigator: Show Service Details` | Show comprehensive service info |
+| `DI Navigator: Navigate to Registration` | Jump to service registration |
+| `DI Navigator: Refresh Tree View` | Update analysis results |
+| `DI Navigator: Show Tree View` | Display the DI Navigator panel |
+| `DI Navigator: Open Configuration` | Access extension settings |
+| `DI Navigator: Recreate Tree View` | Troubleshooting command |
 
-The extension scans all `*.cs` files in .NET projects, excluding configured folders like `bin/`, `obj/`, and `Properties/`.
+**Keyboard Shortcuts**: All commands available in Command Palette (`Ctrl+Shift+P`)
+
+---
 
 ## Architecture
 
-The extension follows a clean, modular architecture:
+### Extension Structure
+```
+di-navigator/
+├── src/                          # TypeScript source code
+│   ├── extension.ts              # Main entry point
+│   ├── core/                     # Core services
+│   │   ├── DINavigatorExtension.ts   # Main extension class
+│   │   ├── AnalysisService.ts        # Analysis orchestration
+│   │   ├── TreeViewManager.ts        # Tree view management
+│   │   ├── ErrorHandler.ts           # Error handling
+│   │   ├── Logger.ts                 # Logging system
+│   │   ├── DataValidator.ts          # Data validation
+│   │   └── models.ts                 # TypeScript models
+│   └── roslynToolService.ts      # Roslyn tool integration
+├── roslyn-tool/                  # .NET Roslyn analyzer
+│   ├── Program.cs               # Main analyzer program
+│   ├── Services/                # Analysis services
+│   ├── Models/                  # .NET data models
+│   ├── Interfaces/              # Service interfaces
+│   └── Plugins/                 # Plugin system
+├── dist/                        # Compiled JavaScript
+└── package.json                 # Extension manifest
+```
 
-- **extension.ts**: Main entry point and activation logic
-- **models.ts**: Data models for services, registrations, and injection sites
-- **roslynDiAnalyzer.ts**: Roslyn-based code analysis engine
-- **roslynToolService.ts**: Service for managing the external Roslyn tool
-- **core/AnalysisService.ts**: Core analysis orchestration
-- **core/DINavigatorExtension.ts**: Main extension class
-- **core/ErrorHandler.ts**: Centralized error handling
-- **core/Logger.ts**: Logging infrastructure
-- **core/TreeViewManager.ts**: Tree view implementation with custom icons
+### Component Overview
+- **Frontend (TypeScript)**: VS Code extension API integration
+- **Backend (.NET)**: Roslyn-based code analysis engine
+- **Communication**: JSON-based interop between TS and .NET
+- **Data Flow**: Analysis results flow from .NET tool to TypeScript models
 
-Key architectural strengths include separation of concerns, robust error handling, and seamless integration with VS Code's native APIs.
+### Key Design Principles
+- **Separation of Concerns**: Clear boundaries between UI, analysis, and data
+- **Error Resilience**: Comprehensive error handling and recovery
+- **Performance**: Efficient analysis with caching and parallel processing
+- **Extensibility**: Plugin architecture for custom analyzers
 
 ---
 
-## Prerequisites
+## Roslyn Tool
 
-- **VS Code**: 1.104.0+
-- **.NET SDK**: 8.0+ (for building the Roslyn parser tool)
-- **Workspace**: .NET project(s) with C# files containing DI registrations
-- **Permissions**: Read access to workspace files
-- **C# Extension**: Install the [C# extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csharp) for full C# language support
+The extension includes a sophisticated .NET Roslyn analyzer (`roslyn-tool/`) that provides:
+
+### Capabilities
+- **AST Analysis**: Deep syntax tree traversal and analysis
+- **Semantic Understanding**: Type resolution and dependency tracking
+- **Multi-Language**: Support for C# and VB.NET projects
+- **Incremental Updates**: Efficient re-analysis of changed files
+
+### Build Process
+```bash
+# Build the Roslyn tool
+npm run build-roslyn-tool
+
+# Test with sample project
+npm run test-roslyn-tool
+
+# Package extension with Roslyn tool
+npm run package-with-roslyn
+```
+
+### Configuration
+The Roslyn tool can be configured via `roslyn-tool/appsettings.json`:
+- **Excluded Directories**: Skip specified folders during analysis
+- **Third-Party Containers**: Patterns for Autofac, Ninject, etc.
+- **Project Types**: Supported project file extensions
 
 ---
 
 ## Configuration
 
-Customize via VS Code Settings (Ctrl+,) under "DI Navigator":
+Access settings via VS Code Settings (`Ctrl+,`) under "DI Navigator":
 
-- `di-navigator.useExternalTools`: Enable/disable external Roslyn tools (default: true)
-- `di-navigator.analysisDepth`: Set analysis depth - "basic", "standard", or "deep" (default: "standard")
-- `di-navigator.showInjectionSites`: Show/hide injection sites in analysis (default: true)
-- `di-navigator.detectCycles`: Enable/disable circular dependency detection (default: true)
-- `di-navigator.highlightConflicts`: Enable/disable conflict highlighting (default: true)
-- `di-navigator.autoRefresh`: Enable automatic refresh on file changes (default: false)
-- `di-navigator.refreshInterval`: Auto-refresh interval in milliseconds (default: 5000)
+### Analysis Settings
+- **`di-navigator.autoRefresh`**: Enable automatic refresh on file changes (default: `false`)
+- **`di-navigator.refreshInterval`**: Auto-refresh interval in milliseconds (default: `5000`)
+- **`di-navigator.enableCaching`**: Enable result caching (default: `true`)
+- **`di-navigator.cacheExpirationMinutes`**: Cache expiration time (default: `30`)
 
+### Performance Settings
+- **`di-navigator.enableParallelProcessing`**: Enable parallel analysis (default: `true`)
+- **`di-navigator.maxDegreeOfParallelism`**: Parallel processing limit (default: `-1` = unlimited)
+- **`di-navigator.analyzeThirdPartyContainers`**: Include third-party DI containers (default: `false`)
+
+### Advanced Settings
+- **`di-navigator.logLevel`**: Minimum log level (`Debug`, `Info`, `Warning`, `Error`)
+- **`di-navigator.pluginDirectory`**: Plugin directory path (default: `"plugins"`)
+- **`di-navigator.enablePlugins`**: Enable plugin system (default: `true`)
+- **`di-navigator.includeSourceCodeInOutput`**: Include source snippets (default: `false`)
+- **`di-navigator.outputFormat`**: Analysis output format (`Json`, `Xml`, `Csv`)
+
+---
+
+## Requirements
+
+### System Requirements
+- **VS Code**: 1.104.0 or higher
+- **.NET SDK**: 9.0 or higher
+- **Operating System**: Windows, macOS, or Linux
+- **Memory**: 2GB+ recommended for large solutions
+
+### Supported Project Types
+- **Solutions**: `.sln`, `.slnx` files
+- **Projects**: `.csproj` files (SDK-style and legacy)
+- **Frameworks**: .NET 6+
+
+### Language Support
+- **C#**: Full support for all language features
 ---
 
 ## Development
 
-### Setup
-1. Clone the repository: `git clone https://github.com/chaluvadis/di-navigator`
-2. Install dependencies: `npm install`
-3. Build the Roslyn tool: `npm run build-roslyn-tool`
+### Prerequisites
+```bash
+# Install Node.js dependencies
+npm install
 
-### Development Commands
-- `npm run compile`: Compile TypeScript to JavaScript
-- `npm run watch`: Watch mode for continuous development
-- `npm run lint`: Run ESLint checks
-- `npm run test`: Run extension tests
-- `npm run package`: Create VSIX package
-- `npm run package-with-roslyn`: Create package with built Roslyn tool
+# Install .NET SDK 9.0+
+# Install VS Code Extension Development tools
+```
+
+### Build Process
+```bash
+# Compile TypeScript
+npm run compile
+
+# Build Roslyn tool
+npm run build-roslyn-tool
+
+# Watch mode for development
+npm run watch
+
+# Package extension
+npm run package
+```
+
+### Testing
+```bash
+# Test Roslyn tool with sample project
+npm run test-roslyn-tool
+
+# Run extension tests
+npm test
+```
 
 ### Project Structure
-```
-src/
-├── extension.ts              # Main entry point
-├── models.ts                 # Data models
-├── roslynDiAnalyzer.ts       # Roslyn analysis
-├── roslynToolService.ts      # Roslyn tool management
-└── core/                     # Core services
-    ├── AnalysisService.ts
-    ├── DINavigatorExtension.ts
-    ├── ErrorHandler.ts
-    ├── Logger.ts
-    └── TreeViewManager.ts
-
-roslyn-tool/                  # C# Roslyn analyzer
-├── DIServiceAnalyzer.csproj
-├── Program.cs
-└── Services/
-    └── ...
-```
+- **Source**: `src/` - TypeScript extension code
+- **Roslyn Tool**: `roslyn-tool/` - .NET analysis engine
+- **Build Output**: `dist/` - Compiled JavaScript
+- **Tests**: `TestProject/` - Test cases and examples
 
 ---
 
 ## Contributing
 
-1. Fork and clone: `git clone https://github.com/chaluvadis/di-navigator`
-2. Install dependencies: `npm install`
-3. Build Roslyn tool: `npm run build-roslyn-tool`
-4. Develop with: `npm run watch`
-5. Test: `npm test`
-6. Create package: `npm run package-with-roslyn`
-7. Submit PR to `main` branch
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-**Guidelines**: Follow ESLint/TypeScript standards, add tests for new features, and update this README for any significant changes.
+### Areas for Contribution
+- **Analysis Features**: New Roslyn analyzers
+- **UI Enhancements**: Tree view improvements
+- **Performance**: Optimization and caching
+- **Testing**: Additional test cases
+- **Documentation**: Guides and examples
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-*Built with ❤️ | [GitHub](https://github.com/chaluvadis) | [Issues](https://github.com/chaluvadis/di-navigator/issues)*
+**Built with ❤️ for the .NET community**
+
+[🐛 Report Issues](https://github.com/chaluvadis/di-navigator/issues) |
+[🚀 Releases](https://github.com/chaluvadis/di-navigator/releases)

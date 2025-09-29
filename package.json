@@ -1,8 +1,8 @@
 {
-  "name": "di-navigator",
+  "name": "di-service-navigator",
   "displayName": "DI Navigator",
   "description": "Advanced dependency injection analysis and visualization for .NET projects",
-  "version": "2.0.0",
+  "version": "0.0.1",
   "publisher": "nomad-in-code",
   "icon": "./icon.png",
   "license": "MIT",
@@ -159,11 +159,6 @@
     "configuration": {
       "title": "DI Navigator",
       "properties": {
-        "di-navigator.useExternalTools": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable external Roslyn tool for enhanced analysis"
-        },
         "di-navigator.autoRefresh": {
           "type": "boolean",
           "default": false,
