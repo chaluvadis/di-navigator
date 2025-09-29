@@ -29,6 +29,20 @@ jobs:
 
     - name: Compile extension
       run: npm run compile
+
+    # .NET Build for roslyn-tool
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x' # adjust as needed
+    
+    - name: Restore NuGet packages in roslyn-tool
+      run: dotnet restore
+      working-directory: roslyn-tool
+    
+    - name: Build roslyn-tool project
+      run: dotnet build --configuration Release
+      working-directory: roslyn-tool
     
     - name: Package extension
       run: |
@@ -53,4 +67,5 @@ jobs:
       with:
         files: ${{ env.VSIX_NAME }}
       env:
+
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
