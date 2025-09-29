@@ -31,7 +31,7 @@
 
 Perfect for large .NET solutions where DI setup spans multiple files and assemblies, making it challenging to track services, lifetimes, dependencies, and potential issues.
 
----
+<img src="./extension.gif" alt="extension">
 
 ## Features
 
@@ -72,21 +72,10 @@ Perfect for large .NET solutions where DI setup spans multiple files and assembl
 
 ## Installation
 
-### From Marketplace
-1. Search for "DI Navigator" in VS Code Extensions
-2. Click Install
-3. Reload VS Code
-
 ### From VSIX (Manual Install)
 1. Download the `.vsix` file from [GitHub Releases](https://github.com/chaluvadis/di-navigator/releases)
 2. Run: `code --install-extension di-navigator-2.0.0.vsix`
 3. Reload VS Code
-
-### Post-Installation Setup
-1. Ensure .NET 9.0+ SDK is installed
-2. Open a .NET workspace (`.sln`, `.slnx`, or `.csproj` files)
-3. Extension activates automatically when .NET projects are detected
-
 ---
 
 ## Usage
