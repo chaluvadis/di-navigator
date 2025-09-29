@@ -24,21 +24,27 @@ jobs:
       with:
         node-version: '22'
 
-    - name: Install Node dependencies
+    - name: Install dependencies
       run: npm i
-
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '9.0.x'
-
-    - name: Build Roslyn tool
-      run: npm run build-roslyn-tool
 
     - name: Compile extension
       run: npm run compile
 
-    - name: Package extension with Roslyn tool
+    # .NET Build for roslyn-tool
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x' # adjust as needed
+    
+    - name: Restore NuGet packages in roslyn-tool
+      run: dotnet restore
+      working-directory: roslyn-tool
+    
+    - name: Build roslyn-tool project
+      run: dotnet build
+      working-directory: roslyn-tool
+    
+    - name: Package extension
       run: |
         # Use the tag name as part of the VSIX filename when available.
         TAG="${{ github.ref_name }}"
@@ -47,8 +53,8 @@ jobs:
         fi
         OUT="di-service-navigator-${TAG}.vsix"
         echo "OUT=${OUT}" >> $GITHUB_ENV
-        echo "Packaging VSIX with Roslyn tool -> ${OUT}"
-        npm run package-with-roslyn -- --out "${OUT}"
+        echo "Packaging VSIX -> ${OUT}"
+        npx vsce package --out "${OUT}"
       shell: bash
 
     - name: Get version from tag
@@ -60,6 +66,6 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: ${{ env.VSIX_NAME }}
-        generate_release_notes: true
       env:
+
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
